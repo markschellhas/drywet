@@ -112,6 +112,9 @@ impl IntoTime for i64 {
 /// `^(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)$`. A leading `+` adds `now`.
 /// Integers and floats pass through as seconds. `ppq` is accepted for
 /// Transport parity and unused here.
+///
+/// Does not validate `bpm` or the time-signature denominator (same as
+/// drywet-py); Transport will.
 pub fn to_seconds(
     value: impl IntoTime,
     bpm: f64,
@@ -128,6 +131,8 @@ pub fn to_seconds(
 /// Convert a time value to pulses at `ppq` ticks per quarter note.
 ///
 /// `round(seconds * (bpm / 60) * ppq)`.
+/// Does not validate `bpm` or the time-signature denominator (same as
+/// drywet-py / `to_seconds`); Transport will.
 pub fn to_ticks(
     value: impl IntoTime,
     bpm: f64,
@@ -142,7 +147,8 @@ pub fn to_ticks(
 
 /// Convert a scientific note name to Hz, or pass a numeric Hz through.
 ///
-/// Numerics must be in `HZ_MIN`–`HZ_MAX`. Clock arguments are unused.
+/// Numeric Hz must be in `HZ_MIN`–`HZ_MAX` (20–20000). Note names only
+/// need valid MIDI — `C0` (~16.35 Hz) is OK. Clock arguments are unused.
 pub fn to_frequency(
     value: impl IntoTime,
     _bpm: f64,

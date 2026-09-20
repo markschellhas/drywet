@@ -1,5 +1,6 @@
 use drywet::limits::DEFAULT_PPQ;
-use drywet::time::{to_frequency, to_seconds, to_ticks};
+use drywet::pitch::PitchError;
+use drywet::time::{to_frequency, to_seconds, to_ticks, TimeError};
 
 const BPM_120: f64 = 120.0;
 const FOUR_FOUR: (u32, u32) = (4, 4);
@@ -91,6 +92,38 @@ fn time_ticks_and_frequency() {
 fn time_invalid_time_raises() {
     let now = 0.0;
     let ppq = DEFAULT_PPQ;
-    assert!(to_seconds("nope", BPM_120, FOUR_FOUR, now, ppq).is_err());
-    assert!(to_seconds("3x", BPM_120, FOUR_FOUR, now, ppq).is_err());
+    assert_eq!(
+        to_seconds("nope", BPM_120, FOUR_FOUR, now, ppq).unwrap_err(),
+        TimeError::InvalidTime("nope".into())
+    );
+    assert_eq!(
+        to_seconds("3x", BPM_120, FOUR_FOUR, now, ppq).unwrap_err(),
+        TimeError::InvalidTime("3x".into())
+    );
+    assert_eq!(
+        to_seconds("0n", BPM_120, FOUR_FOUR, now, ppq).unwrap_err(),
+        TimeError::InvalidTime("0n".into())
+    );
+    assert_eq!(
+        to_seconds("0t", BPM_120, FOUR_FOUR, now, ppq).unwrap_err(),
+        TimeError::InvalidTime("0t".into())
+    );
+}
+
+#[test]
+fn time_frequency_errors() {
+    let now = 0.0;
+    let ppq = DEFAULT_PPQ;
+    assert_eq!(
+        to_frequency(19.0, BPM_120, FOUR_FOUR, now, ppq).unwrap_err(),
+        TimeError::InvalidFrequency(19.0)
+    );
+    assert_eq!(
+        to_frequency(20001.0, BPM_120, FOUR_FOUR, now, ppq).unwrap_err(),
+        TimeError::InvalidFrequency(20001.0)
+    );
+    assert_eq!(
+        to_frequency("H4", BPM_120, FOUR_FOUR, now, ppq).unwrap_err(),
+        TimeError::Pitch(PitchError::InvalidNote("H4".into()))
+    );
 }
