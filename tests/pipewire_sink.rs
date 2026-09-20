@@ -140,3 +140,21 @@ fn pipewire_sink_write_without_clock_stays_queued_for_process() {
     sink.process(&mut out);
     assert_eq!(out, [0.2, 0.4]);
 }
+
+#[test]
+fn pipewire_sink_overflow_drops_incoming_not_live_slots() {
+    let mut sink = PipeWireSink::new(44100, 1);
+    for i in 0..64 {
+        sink.mix(&[(i + 1) as f32], Some(i));
+    }
+    sink.mix(&[99.0], Some(64));
+    sink.write(&[0.0; 8]);
+    assert!(sink.accepted());
+    assert_eq!(sink.write_cursor(), 8);
+
+    let mut out = [0.0f32; 65];
+    sink.process(&mut out);
+    let expected: [f32; 64] = std::array::from_fn(|i| (i + 1) as f32);
+    assert_eq!(&out[..64], &expected);
+    assert_eq!(out[64], 0.0);
+}

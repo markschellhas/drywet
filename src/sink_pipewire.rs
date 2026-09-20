@@ -159,6 +159,11 @@ struct MixCmd {
 }
 
 /// Fixed-capacity mix table. Enqueue copies PCM into a slot; render only reads.
+///
+/// Bound: [`SLOT_COUNT`] (64) slots × [`SLOT_FRAMES`] (4096) mono frames, allocated
+/// once in [`Self::new`]. No heap after init. When every slot still holds a live
+/// command (`cmd_end > playback`), [`Self::enqueue`] drops the incoming chunk
+/// rather than overwriting audio that has not been rendered yet.
 #[derive(Debug)]
 struct MixStorage {
     slots: Box<[f32]>,
@@ -177,32 +182,33 @@ impl MixStorage {
         }
     }
 
-    fn alloc_slot(&mut self) -> usize {
+    /// Free index, or a fully-consumed slot (`cmd_end <= playback`). Never steals live audio.
+    fn alloc_slot(&mut self) -> Option<usize> {
         for i in 0..SLOT_COUNT {
             if !self.occupied[i] {
-                return i;
+                return Some(i);
             }
         }
-        let mut best = 0;
-        let mut best_end = usize::MAX;
         for i in 0..SLOT_COUNT {
-            if self.occupied[i] {
-                let end = self.cmds[i].at.saturating_add(self.cmds[i].len);
-                if end < best_end {
-                    best_end = end;
-                    best = i;
-                }
+            if !self.occupied[i] {
+                continue;
+            }
+            let cmd_end = self.cmds[i].at.saturating_add(self.cmds[i].len);
+            if cmd_end <= self.playback {
+                self.occupied[i] = false;
+                return Some(i);
             }
         }
-        self.occupied[best] = false;
-        best
+        None
     }
 
     fn enqueue(&mut self, frames: &[f32], at: usize) {
         let mut offset = 0;
         while offset < frames.len() {
             let n = (frames.len() - offset).min(SLOT_FRAMES);
-            let slot = self.alloc_slot();
+            let Some(slot) = self.alloc_slot() else {
+                return;
+            };
             let start = slot * SLOT_FRAMES;
             self.slots[start..start + n].copy_from_slice(&frames[offset..offset + n]);
             self.cmds[slot] = MixCmd {
@@ -266,6 +272,10 @@ impl MixStorage {
 /// `stop` leaves it open; `close` tears it down. The process callback pulls
 /// mixed PCM from preallocated storage — it never spawns `pw-cat` / `pw-play`
 /// / `paplay` / `aplay`.
+///
+/// Mix storage is 64 slots × 4096 frames, allocated at construction (no heap
+/// after init). A mix/write that arrives while every slot is still live
+/// (`cmd_end > playback`) is dropped; `write_cursor` and `accepted` still update.
 #[derive(Debug)]
 pub struct PipeWireSink<B: StreamBackend = MockStream> {
     sample_rate: u32,
