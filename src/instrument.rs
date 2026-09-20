@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::f64::consts::PI;
 use std::fmt;
+use std::fs;
+use std::path::Path;
 
 use crate::context::Context;
 use crate::limits::DEFAULT_MAX_VOICES;
@@ -17,7 +20,7 @@ const TRIGGER_ATTACK_SECONDS: f64 = 1.0;
 /// Failure triggering a voice (polyphony cap, unknown drum, bad note, or bad time).
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstrumentError {
-    /// [`Synth::trigger_attack`] would exceed [`Synth::with_max_voices`].
+    /// [`Synth::trigger_attack`] or [`Sampler::trigger_attack`] would exceed the voice cap.
     VoiceLimitExceeded,
     /// [`Drum::trigger`] name was not kick, snare, hat, or a hat alias.
     UnknownDrum(String),
@@ -25,6 +28,10 @@ pub enum InstrumentError {
     Pitch(PitchError),
     /// Duration or start-time conversion failed.
     Time(TimeError),
+    /// WAV was missing, unreadable, or not 16-bit PCM.
+    InvalidWav(String),
+    /// [`Sampler`] trigger ran with an empty sample map.
+    EmptySampler,
 }
 
 impl fmt::Display for InstrumentError {
@@ -34,6 +41,8 @@ impl fmt::Display for InstrumentError {
             InstrumentError::UnknownDrum(name) => write!(f, "unknown drum: {name:?}"),
             InstrumentError::Pitch(err) => write!(f, "{err}"),
             InstrumentError::Time(err) => write!(f, "{err}"),
+            InstrumentError::InvalidWav(msg) => write!(f, "{msg}"),
+            InstrumentError::EmptySampler => write!(f, "sampler has no samples"),
         }
     }
 }
@@ -43,7 +52,10 @@ impl Error for InstrumentError {
         match self {
             InstrumentError::Pitch(err) => Some(err),
             InstrumentError::Time(err) => Some(err),
-            InstrumentError::VoiceLimitExceeded | InstrumentError::UnknownDrum(_) => None,
+            InstrumentError::VoiceLimitExceeded
+            | InstrumentError::UnknownDrum(_)
+            | InstrumentError::InvalidWav(_)
+            | InstrumentError::EmptySampler => None,
         }
     }
 }
@@ -259,6 +271,220 @@ impl Drum {
     }
 }
 
+/// Note/MIDI → WAV map with nearest-sample pitch fill and a polyphony cap.
+///
+/// Missing pitches resample the nearest loaded sample by the semitone ratio.
+/// Files are resampled on load when their rate differs from the context.
+/// `loop_flag` is stored for API parity; the held-loop mixer is out of scope.
+#[derive(Debug)]
+pub struct Sampler {
+    sample_rate: u32,
+    max_voices: u32,
+    active: u32,
+    samples: HashMap<u8, Vec<f32>>,
+    loop_flag: bool,
+}
+
+impl Sampler {
+    /// Empty map, [`DEFAULT_MAX_VOICES`], at `ctx.sample_rate()`.
+    pub fn new<S: Sink>(ctx: &Context<S>) -> Self {
+        Self::with_max_voices(ctx, DEFAULT_MAX_VOICES)
+    }
+
+    /// Empty map with polyphonic cap `max_voices`.
+    pub fn with_max_voices<S: Sink>(ctx: &Context<S>, max_voices: u32) -> Self {
+        Self {
+            sample_rate: ctx.sample_rate(),
+            max_voices,
+            active: 0,
+            samples: HashMap::new(),
+            loop_flag: false,
+        }
+    }
+
+    /// Load each `(note, path)` pair at `max_voices`.
+    pub fn with_map<S, I, N, P>(
+        ctx: &Context<S>,
+        urls: I,
+        max_voices: u32,
+    ) -> Result<Self, InstrumentError>
+    where
+        S: Sink,
+        I: IntoIterator<Item = (N, P)>,
+        N: IntoNote,
+        P: AsRef<Path>,
+    {
+        let mut sampler = Self::with_max_voices(ctx, max_voices);
+        for (note, path) in urls {
+            sampler.add(note, path)?;
+        }
+        Ok(sampler)
+    }
+
+    /// Load `C4.wav`-style filenames from `dir` (`^([A-Ga-g][#b]?\\d+)\\.wav$`).
+    pub fn from_directory<S: Sink>(
+        ctx: &Context<S>,
+        dir: impl AsRef<Path>,
+    ) -> Result<Self, InstrumentError> {
+        let mut sampler = Self::new(ctx);
+        let entries = fs::read_dir(dir.as_ref()).map_err(wav_io_error)?;
+        for entry in entries {
+            let entry = entry.map_err(wav_io_error)?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
+            if let Some(note) = wav_note_stem(name) {
+                sampler.add(note, &path)?;
+            }
+        }
+        Ok(sampler)
+    }
+
+    /// Voices currently counted toward the polyphony cap.
+    pub fn active_voices(&self) -> u32 {
+        self.active
+    }
+
+    /// Whether `loop` was requested. The held-loop mixer is not implemented.
+    pub fn loop_flag(&self) -> bool {
+        self.loop_flag
+    }
+
+    /// MIDI keys currently mapped to loaded PCM.
+    pub fn samples(&self) -> &HashMap<u8, Vec<f32>> {
+        &self.samples
+    }
+
+    /// Decode `path` as 16-bit PCM and store it at `note`.
+    pub fn add(
+        &mut self,
+        note: impl IntoNote,
+        path: impl AsRef<Path>,
+    ) -> Result<&mut Self, InstrumentError> {
+        let midi = note.into_midi()?;
+        let frames = load_wav(path.as_ref(), self.sample_rate)?;
+        self.samples.insert(midi, frames);
+        Ok(self)
+    }
+
+    /// Mix the full (pitch-filled) sample at `time` and keep the voice.
+    pub fn trigger_attack<S, N>(
+        &mut self,
+        ctx: &mut Context<S>,
+        note: N,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError>
+    where
+        S: Sink,
+        N: IntoNote,
+    {
+        self.acquire()?;
+        match self.mix_sample(ctx, note, None::<f64>, time) {
+            Ok(()) => Ok(self),
+            Err(err) => {
+                self.release_voice();
+                Err(err)
+            }
+        }
+    }
+
+    /// Mix up to `duration` of the (pitch-filled) sample, then release.
+    pub fn trigger_attack_release<S, N, D>(
+        &mut self,
+        ctx: &mut Context<S>,
+        note: N,
+        duration: D,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError>
+    where
+        S: Sink,
+        N: IntoNote,
+        D: IntoTime,
+    {
+        self.acquire()?;
+        let result = self.mix_sample(ctx, note, Some(duration), time);
+        self.release_voice();
+        result.map(|()| self)
+    }
+
+    /// Decrement the voice count. v1 one-shot does not silence already-mixed PCM.
+    pub fn trigger_release(
+        &mut self,
+        note: impl IntoNote,
+        _time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError> {
+        let _midi = note.into_midi()?;
+        self.release_voice();
+        Ok(self)
+    }
+
+    /// Drop every counted voice. v1 one-shot does not silence already-mixed PCM.
+    pub fn release_all(&mut self, _time: Option<TimeValue>) -> &mut Self {
+        self.active = 0;
+        self
+    }
+
+    fn acquire(&mut self) -> Result<(), InstrumentError> {
+        if self.active >= self.max_voices {
+            return Err(InstrumentError::VoiceLimitExceeded);
+        }
+        self.active += 1;
+        Ok(())
+    }
+
+    fn release_voice(&mut self) {
+        if self.active > 0 {
+            self.active -= 1;
+        }
+    }
+
+    fn mix_sample<S, N, D>(
+        &self,
+        ctx: &mut Context<S>,
+        note: N,
+        duration: Option<D>,
+        time: Option<TimeValue>,
+    ) -> Result<(), InstrumentError>
+    where
+        S: Sink,
+        N: IntoNote,
+        D: IntoTime,
+    {
+        let midi = note.into_midi()?;
+        let mut frames = self.nearest(midi)?;
+        if let Some(value) = duration {
+            let duration_s = ctx.transport().to_seconds(value)?;
+            let n = (duration_s * f64::from(self.sample_rate)).round() as usize;
+            if n < frames.len() {
+                frames.truncate(n);
+            }
+        }
+        mix_at_time(ctx, &frames, time)
+    }
+
+    fn nearest(&self, midi: u8) -> Result<Vec<f32>, InstrumentError> {
+        if self.samples.is_empty() {
+            return Err(InstrumentError::EmptySampler);
+        }
+        if let Some(frames) = self.samples.get(&midi) {
+            return Ok(frames.clone());
+        }
+        let nearest = self
+            .samples
+            .keys()
+            .copied()
+            .min_by_key(|key| (key.abs_diff(midi), *key))
+            .expect("samples is non-empty");
+        let semitones = i32::from(midi) - i32::from(nearest);
+        Ok(pitch_shift(&self.samples[&nearest], semitones))
+    }
+}
+
 /// Mix `frames` at `time`, or at the write cursor when `time` is `None`.
 fn mix_at_time<S: Sink>(
     ctx: &mut Context<S>,
@@ -381,4 +607,159 @@ fn render_hat(sample_rate: u32) -> Vec<f32> {
         frames.push((noise * env * 0.28) as f32);
     }
     frames
+}
+
+fn wav_io_error(err: std::io::Error) -> InstrumentError {
+    InstrumentError::InvalidWav(err.to_string())
+}
+
+fn invalid_wav(msg: impl Into<String>) -> InstrumentError {
+    InstrumentError::InvalidWav(msg.into())
+}
+
+/// `^([A-Ga-g][#b]?\\d+)\\.wav$` (case-insensitive extension).
+fn wav_note_stem(name: &str) -> Option<&str> {
+    let bytes = name.as_bytes();
+    if bytes.len() < 4 {
+        return None;
+    }
+    let ext = &bytes[bytes.len() - 4..];
+    if !ext.eq_ignore_ascii_case(b".wav") {
+        return None;
+    }
+    let stem = &name[..name.len() - 4];
+    let stem_bytes = stem.as_bytes();
+    if stem_bytes.is_empty() || !matches!(stem_bytes[0], b'A'..=b'G' | b'a'..=b'g') {
+        return None;
+    }
+    let mut idx = 1;
+    if let Some(&acc) = stem_bytes.get(idx) {
+        if acc == b'#' || acc == b'b' {
+            idx += 1;
+        }
+    }
+    let digits = &stem_bytes[idx..];
+    if digits.is_empty() || !digits.iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(stem)
+}
+
+fn load_wav(path: &Path, sample_rate: u32) -> Result<Vec<f32>, InstrumentError> {
+    let data = fs::read(path).map_err(wav_io_error)?;
+    decode_wav(&data, sample_rate)
+}
+
+fn decode_wav(data: &[u8], sample_rate: u32) -> Result<Vec<f32>, InstrumentError> {
+    if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+        return Err(invalid_wav("not a RIFF/WAVE file"));
+    }
+
+    let mut offset = 12usize;
+    let mut fmt = None;
+    let mut pcm: Option<&[u8]> = None;
+    while offset.saturating_add(8) <= data.len() {
+        let id = &data[offset..offset + 4];
+        let size = u32::from_le_bytes(
+            data[offset + 4..offset + 8]
+                .try_into()
+                .expect("chunk size is 4 bytes"),
+        ) as usize;
+        let start = offset + 8;
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| invalid_wav("WAV chunk overflows"))?;
+        if end > data.len() {
+            return Err(invalid_wav("WAV chunk truncated"));
+        }
+        if id == b"fmt " {
+            fmt = Some(parse_fmt_chunk(&data[start..end])?);
+        } else if id == b"data" {
+            pcm = Some(&data[start..end]);
+        }
+        offset = end;
+        if size % 2 == 1 && offset < data.len() {
+            offset += 1;
+        }
+    }
+
+    let (channels, src_rate) = fmt.ok_or_else(|| invalid_wav("WAV missing fmt chunk"))?;
+    let raw = pcm.ok_or_else(|| invalid_wav("WAV missing data chunk"))?;
+    if channels == 0 {
+        return Err(invalid_wav("WAV has no channels"));
+    }
+
+    let samples: Vec<i16> = raw
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect();
+    let ch = usize::from(channels);
+    let frames: Vec<f32> = if ch == 1 {
+        samples.iter().map(|&s| f32::from(s) / 32767.0).collect()
+    } else {
+        samples
+            .chunks_exact(ch)
+            .map(|frame| {
+                let sum: f32 = frame.iter().map(|&s| f32::from(s)).sum();
+                (sum / ch as f32) / 32767.0
+            })
+            .collect()
+    };
+    Ok(resample(&frames, src_rate, sample_rate))
+}
+
+fn parse_fmt_chunk(chunk: &[u8]) -> Result<(u16, u32), InstrumentError> {
+    if chunk.len() < 16 {
+        return Err(invalid_wav("WAV fmt chunk too short"));
+    }
+    let format = u16::from_le_bytes([chunk[0], chunk[1]]);
+    let channels = u16::from_le_bytes([chunk[2], chunk[3]]);
+    let rate = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+    let bits = u16::from_le_bytes([chunk[14], chunk[15]]);
+    if format != 1 {
+        return Err(invalid_wav("WAV must be PCM"));
+    }
+    if bits != 16 {
+        return Err(invalid_wav("WAV must be 16-bit"));
+    }
+    Ok((channels, rate))
+}
+
+fn resample(frames: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    if src_rate == dst_rate {
+        return frames.to_vec();
+    }
+    if frames.is_empty() {
+        return Vec::new();
+    }
+    let ratio = f64::from(src_rate) / f64::from(dst_rate);
+    let n = (frames.len() as f64 / ratio).round() as usize;
+    let last = frames.len() - 1;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let pos = i as f64 * ratio;
+        let lo = (pos as usize).min(last);
+        let hi = (lo + 1).min(last);
+        let frac = (pos - lo as f64) as f32;
+        out.push(frames[lo] * (1.0 - frac) + frames[hi] * frac);
+    }
+    out
+}
+
+fn pitch_shift(frames: &[f32], semitones: i32) -> Vec<f32> {
+    if frames.is_empty() || semitones == 0 {
+        return frames.to_vec();
+    }
+    let ratio = 2.0_f64.powf(f64::from(semitones) / 12.0);
+    let n = ((frames.len() as f64 / ratio).round() as usize).max(1);
+    let last = frames.len() - 1;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let pos = i as f64 * ratio;
+        let lo = (pos as usize).min(last);
+        let hi = (lo + 1).min(last);
+        let frac = (pos - pos.floor()) as f32;
+        out.push(frames[lo] * (1.0 - frac) + frames[hi] * frac);
+    }
+    out
 }

@@ -10,5 +10,5 @@ pub mod time;
 pub mod transport;
 
 pub use context::Context;
-pub use instrument::{Drum, Synth};
+pub use instrument::{Drum, Sampler, Synth};
 pub use sink::BufferSink;
