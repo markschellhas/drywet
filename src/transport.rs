@@ -539,6 +539,19 @@ impl Transport {
         Ok(())
     }
 
+    /// Remove scheduled events whose ids are in `ids`.
+    ///
+    /// Port of drywet-py filtering `_events` by id. [`crate::Sequence::stop`]
+    /// uses this so a sequence can detach without clearing the rest of the
+    /// transport schedule.
+    pub fn cancel_ids(&mut self, ids: &[u64]) {
+        if ids.is_empty() {
+            return;
+        }
+        let to_drop: HashSet<u64> = ids.iter().copied().collect();
+        self.events.retain(|event| !to_drop.contains(&event.id));
+    }
+
     /// Remove every scheduled event and forget which occurrences have fired.
     pub fn clear(&mut self) {
         self.events.clear();
@@ -811,6 +824,11 @@ impl<'a, S: Sink> TransportRef<'a, S> {
     /// Drop events whose start time is `>= after` (converted to seconds).
     pub fn cancel(&mut self, after: impl IntoTime) -> Result<(), TransportError> {
         self.transport.cancel(after)
+    }
+
+    /// Remove scheduled events whose ids are in `ids`.
+    pub fn cancel_ids(&mut self, ids: &[u64]) {
+        self.transport.cancel_ids(ids);
     }
 
     /// Remove every scheduled event and forget which occurrences have fired.
