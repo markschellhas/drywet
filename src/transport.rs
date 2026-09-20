@@ -1,18 +1,20 @@
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
+use std::rc::Rc;
 
-use crate::limits::{BPM_MAX, BPM_MIN, DEFAULT_PPQ, MAX_SCHEDULE_SECONDS};
+use crate::limits::{BPM_MAX, BPM_MIN, DEFAULT_PPQ, DEFAULT_SAMPLE_RATE, MAX_SCHEDULE_SECONDS};
 use crate::sink::Sink;
 use crate::time::{to_frequency, to_seconds, to_ticks, IntoTime, TimeError};
 
-type EventCallback = Box<dyn Fn(f64) + 'static>;
+type ListenerCallback = Box<dyn Fn(f64) + 'static>;
+type ScheduleCallback = Rc<dyn Fn(f64) + 'static>;
 
 /// One-shot or repeating callback registered with [`Transport::schedule`].
 struct ScheduledEvent {
     id: u64,
     time: f64,
-    callback: EventCallback,
+    callback: ScheduleCallback,
     interval: Option<f64>,
 }
 
@@ -63,10 +65,11 @@ pub struct Transport {
     looping: bool,
     loop_start_s: f64,
     loop_end_s: f64,
-    on_start: Vec<EventCallback>,
-    on_stop: Vec<EventCallback>,
-    on_pause: Vec<EventCallback>,
-    on_loop: Vec<EventCallback>,
+    sample_rate: u32,
+    on_start: Vec<ListenerCallback>,
+    on_stop: Vec<ListenerCallback>,
+    on_pause: Vec<ListenerCallback>,
+    on_loop: Vec<ListenerCallback>,
     events: Vec<ScheduledEvent>,
     next_event_id: u64,
     fired: HashSet<FiredKey>,
@@ -225,6 +228,7 @@ impl fmt::Debug for Transport {
             .field("loop", &self.looping)
             .field("loop_start", &self.loop_start_s)
             .field("loop_end", &self.loop_end_s)
+            .field("sample_rate", &self.sample_rate)
             .finish_non_exhaustive()
     }
 }
@@ -241,6 +245,7 @@ impl Transport {
             looping: false,
             loop_start_s: 0.0,
             loop_end_s: 0.0,
+            sample_rate: DEFAULT_SAMPLE_RATE,
             on_start: Vec::new(),
             on_stop: Vec::new(),
             on_pause: Vec::new(),
@@ -254,6 +259,16 @@ impl Transport {
     /// Current lifecycle state.
     pub fn state(&self) -> TransportState {
         self.state
+    }
+
+    /// Sample rate copied from [`crate::Context`] at construction.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Set the sample rate used by [`TransportRef::render`] to pad frames.
+    pub fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.sample_rate = sample_rate;
     }
 
     /// Last-set tempo. Conversions use [`clock_bpm`](Self::clock_bpm).
@@ -493,7 +508,7 @@ impl Transport {
         self.events.push(ScheduledEvent {
             id,
             time,
-            callback: Box::new(callback),
+            callback: Rc::new(callback),
             interval: None,
         });
         Ok(id)
@@ -526,7 +541,7 @@ impl Transport {
         self.events.push(ScheduledEvent {
             id,
             time: start,
-            callback: Box::new(callback),
+            callback: Rc::new(callback),
             interval: Some(interval),
         });
         Ok(id)
@@ -584,6 +599,39 @@ impl Transport {
                 }
                 Ok(times)
             }
+        }
+    }
+
+    /// Clone one-shot events that fall in the loop range across each cycle
+    /// through `until` (drywet-py `render` loop expansion).
+    fn expand_loop_one_shots(&mut self, until: f64) {
+        if !(self.looping && self.loop_end_s > self.loop_start_s) {
+            return;
+        }
+        let length = self.loop_end_s - self.loop_start_s;
+        let loop_start = self.loop_start_s;
+        let loop_end = self.loop_end_s;
+        let mut repeats = Vec::new();
+        for event in &self.events {
+            if event.interval.is_some() {
+                continue;
+            }
+            if loop_start <= event.time && event.time < loop_end {
+                let mut cursor = event.time + length;
+                while cursor <= until + OCCURRENCE_EPS {
+                    repeats.push((cursor, Rc::clone(&event.callback)));
+                    cursor += length;
+                }
+            }
+        }
+        for (time, callback) in repeats {
+            let id = self.next_id();
+            self.events.push(ScheduledEvent {
+                id,
+                time,
+                callback,
+                interval: None,
+            });
         }
     }
 
@@ -676,6 +724,11 @@ impl<'a, S: Sink> TransportRef<'a, S> {
     /// Current lifecycle state.
     pub fn state(&self) -> TransportState {
         self.transport.state()
+    }
+
+    /// Sample rate copied from [`crate::Context`] onto the transport.
+    pub fn sample_rate(&self) -> u32 {
+        self.transport.sample_rate()
     }
 
     /// Output latency from the sink.
@@ -849,5 +902,26 @@ impl<'a, S: Sink> TransportRef<'a, S> {
     /// time before calling the callback, then to `until`.
     pub fn fire_until(&mut self, until: impl IntoTime) -> Result<(), TransportError> {
         self.transport.fire_until(until)
+    }
+
+    /// Start if needed, fire scheduled events through `duration`, pad the
+    /// sink, and return a copy of the sink frames.
+    ///
+    /// Port of drywet-py `Transport.render`. After this call the playhead
+    /// equals the converted duration (`fire_until` already sets `seconds`).
+    pub fn render(&mut self, duration: impl IntoTime) -> Result<Vec<f32>, TransportError> {
+        if self.transport.state() != TransportState::Started {
+            self.start();
+        }
+        let until = self.transport.to_seconds(duration)?;
+        self.transport.expand_loop_one_shots(until);
+        self.transport.fire_until(until)?;
+        let needed = (until * f64::from(self.transport.sample_rate())).round() as usize;
+        let cursor = self.sink.write_cursor();
+        if cursor < needed {
+            let pad = vec![0.0; needed - cursor];
+            self.sink.write(&pad);
+        }
+        Ok(self.sink.frames().to_vec())
     }
 }

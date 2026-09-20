@@ -28,11 +28,13 @@ impl Context<BufferSink> {
 impl<S: Sink> Context<S> {
     /// Take ownership of `sink` at the given rate and channel count.
     pub fn with(sample_rate: u32, channels: u16, sink: S) -> Self {
+        let mut transport = Transport::new();
+        transport.set_sample_rate(sample_rate);
         Self {
             sample_rate,
             channels,
             sink,
-            transport: Transport::new(),
+            transport,
         }
     }
 

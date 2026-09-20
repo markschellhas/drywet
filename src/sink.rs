@@ -34,6 +34,13 @@ pub trait Sink {
     /// [`crate::transport::TransportRef::start`] uses this so BufferSink
     /// reports accepted immediately when the clock starts.
     fn mark_accepted(&mut self) {}
+
+    /// Interleaved buffer contents. Empty for sinks that do not buffer.
+    ///
+    /// [`crate::transport::TransportRef::render`] copies this after padding.
+    fn frames(&self) -> &[f32] {
+        &[]
+    }
 }
 
 /// In-memory expanding f32 buffer for tests and offline render.
@@ -181,5 +188,9 @@ impl Sink for BufferSink {
 
     fn mark_accepted(&mut self) {
         BufferSink::mark_accepted(self);
+    }
+
+    fn frames(&self) -> &[f32] {
+        BufferSink::frames(self)
     }
 }
