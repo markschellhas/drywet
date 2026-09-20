@@ -1,8 +1,9 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::limits::{BPM_MAX, BPM_MIN};
+use crate::limits::{BPM_MAX, BPM_MIN, DEFAULT_PPQ};
 use crate::sink::Sink;
+use crate::time::{to_frequency, to_seconds, to_ticks, IntoTime, TimeError};
 
 /// Arrangement clock owned by [`crate::Context`].
 ///
@@ -85,6 +86,42 @@ fn normalize_signature(value: TimeSignature) -> Result<(u32, u32), TransportErro
     }
 }
 
+/// Port of drywet-py `Transport.position`: `bars:beats:sixteenths` from seconds.
+fn bars_beats_sixteenths(seconds: f64, bpm: f64, time_signature: (u32, u32)) -> String {
+    let (num, den) = time_signature;
+    let quarter = 60.0 / bpm;
+    let beat = quarter * (4.0 / f64::from(den));
+    let bar = f64::from(num) * beat;
+    let sixteenth = quarter / 4.0;
+    let mut remaining = seconds;
+    let mut bars = if bar != 0.0 {
+        (remaining / bar).floor() as i64
+    } else {
+        0
+    };
+    remaining -= bars as f64 * bar;
+    let mut beats = if beat != 0.0 {
+        (remaining / beat).floor() as i64
+    } else {
+        0
+    };
+    remaining -= beats as f64 * beat;
+    let mut sixteenths = if sixteenth != 0.0 {
+        (remaining / sixteenth).round() as i64
+    } else {
+        0
+    };
+    if sixteenths == 4 {
+        sixteenths = 0;
+        beats += 1;
+    }
+    if beats >= i64::from(num) {
+        beats = 0;
+        bars += 1;
+    }
+    format!("{bars}:{beats}:{sixteenths}")
+}
+
 impl Transport {
     /// Stopped transport at 120 BPM, 4/4, playhead at zero.
     pub fn new() -> Self {
@@ -143,14 +180,58 @@ impl Transport {
         Ok(())
     }
 
-    /// Playhead in seconds. Always `0.0` until a later task advances frames.
+    /// Playhead in seconds. Render (later) advances this from frames / sample rate.
     pub fn seconds(&self) -> f64 {
         self.seconds
     }
 
-    /// Bars:beats:sixteenths. `"0:0:0"` at rest and after stop.
+    /// Set the playhead in seconds. Tests use this until render advances frames.
+    pub fn set_seconds(&mut self, seconds: f64) {
+        self.seconds = seconds;
+    }
+
+    /// Playhead in PPQ ticks: `to_ticks(seconds)` at [`DEFAULT_PPQ`].
+    pub fn ticks(&self) -> i64 {
+        self.to_ticks(self.seconds)
+            .expect("numeric seconds always convert")
+    }
+
+    /// Bars:beats:sixteenths from the current playhead and [`clock_bpm`](Self::clock_bpm).
     pub fn position(&self) -> String {
-        "0:0:0".to_string()
+        bars_beats_sixteenths(self.seconds, self.clock_bpm(), self.time_signature)
+    }
+
+    /// Convert a note value, BBS string, or raw seconds using the current clock.
+    pub fn to_seconds(&self, value: impl IntoTime) -> Result<f64, TimeError> {
+        to_seconds(
+            value,
+            self.clock_bpm(),
+            self.time_signature,
+            self.seconds,
+            DEFAULT_PPQ,
+        )
+    }
+
+    /// Convert a time value to pulses at [`DEFAULT_PPQ`] using the current clock.
+    pub fn to_ticks(&self, value: impl IntoTime) -> Result<i64, TimeError> {
+        to_ticks(
+            value,
+            self.clock_bpm(),
+            self.time_signature,
+            self.seconds,
+            DEFAULT_PPQ,
+        )
+    }
+
+    /// Convert a note name or numeric Hz using the current clock arguments.
+    pub fn to_frequency(&self, value: impl IntoTime) -> Result<f64, TimeError> {
+        to_frequency(
+            value,
+            self.clock_bpm(),
+            self.time_signature,
+            self.seconds,
+            DEFAULT_PPQ,
+        )
     }
 
     fn start(&mut self) -> bool {
@@ -278,8 +359,33 @@ impl<'a, S: Sink> TransportRef<'a, S> {
         self.transport.seconds()
     }
 
-    /// Bars:beats:sixteenths. `"0:0:0"` at rest and after stop.
+    /// Set the playhead in seconds. Tests use this until render advances frames.
+    pub fn set_seconds(&mut self, seconds: f64) {
+        self.transport.set_seconds(seconds);
+    }
+
+    /// Playhead in PPQ ticks: `to_ticks(seconds)` at [`DEFAULT_PPQ`].
+    pub fn ticks(&self) -> i64 {
+        self.transport.ticks()
+    }
+
+    /// Bars:beats:sixteenths from the current playhead and clock tempo.
     pub fn position(&self) -> String {
         self.transport.position()
+    }
+
+    /// Convert a note value, BBS string, or raw seconds using the current clock.
+    pub fn to_seconds(&self, value: impl IntoTime) -> Result<f64, TimeError> {
+        self.transport.to_seconds(value)
+    }
+
+    /// Convert a time value to pulses at [`DEFAULT_PPQ`] using the current clock.
+    pub fn to_ticks(&self, value: impl IntoTime) -> Result<i64, TimeError> {
+        self.transport.to_ticks(value)
+    }
+
+    /// Convert a note name or numeric Hz using the current clock arguments.
+    pub fn to_frequency(&self, value: impl IntoTime) -> Result<f64, TimeError> {
+        self.transport.to_frequency(value)
     }
 }
