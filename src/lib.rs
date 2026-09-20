@@ -11,6 +11,6 @@ pub mod time;
 pub mod transport;
 
 pub use context::Context;
-pub use event::Sequence;
+pub use event::{Loop, Part, Sequence};
 pub use instrument::{Drum, Sampler, Synth};
 pub use sink::BufferSink;

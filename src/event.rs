@@ -72,10 +72,21 @@ impl<T: Into<SequenceEvent>, const N: usize> From<[T; N]> for SequenceEvent {
     }
 }
 
-/// Clock that [`Sequence`] can attach to: [`Transport`] or [`TransportRef`].
+/// Clock that [`Sequence`], [`Part`], and [`Loop`] can attach to:
+/// [`Transport`] or [`TransportRef`].
 pub trait SequenceClock {
     /// Schedule `callback` once at `time` seconds. Returns the event id.
     fn schedule<F>(&mut self, callback: F, time: f64) -> Result<u64, TransportError>
+    where
+        F: Fn(f64) + 'static;
+
+    /// Schedule `callback` at `start_time`, then every `interval` seconds.
+    fn schedule_repeat<F>(
+        &mut self,
+        callback: F,
+        interval: f64,
+        start_time: f64,
+    ) -> Result<u64, TransportError>
     where
         F: Fn(f64) + 'static;
 
@@ -94,6 +105,18 @@ impl SequenceClock for Transport {
         Transport::schedule(self, callback, time)
     }
 
+    fn schedule_repeat<F>(
+        &mut self,
+        callback: F,
+        interval: f64,
+        start_time: f64,
+    ) -> Result<u64, TransportError>
+    where
+        F: Fn(f64) + 'static,
+    {
+        Transport::schedule_repeat(self, callback, interval, start_time)
+    }
+
     fn cancel_ids(&mut self, ids: &[u64]) {
         Transport::cancel_ids(self, ids);
     }
@@ -109,6 +132,18 @@ impl<S: Sink> SequenceClock for TransportRef<'_, S> {
         F: Fn(f64) + 'static,
     {
         TransportRef::schedule(self, callback, time)
+    }
+
+    fn schedule_repeat<F>(
+        &mut self,
+        callback: F,
+        interval: f64,
+        start_time: f64,
+    ) -> Result<u64, TransportError>
+    where
+        F: Fn(f64) + 'static,
+    {
+        TransportRef::schedule_repeat(self, callback, interval, start_time)
     }
 
     fn cancel_ids(&mut self, ids: &[u64]) {
@@ -203,4 +238,121 @@ fn flatten(events: &[SequenceEvent], start: f64, width: f64) -> Vec<(f64, String
         }
     }
     out
+}
+
+/// Timed event list: each `(when, value)` is scheduled relative to start offset.
+///
+/// `.start(offset)` only registers ids; callbacks stay silent until
+/// `transport.start()` / [`Transport::fire_until`] / later render.
+pub struct Part {
+    callback: Rc<dyn Fn(f64, &str)>,
+    events: Vec<(TimeValue, String)>,
+    ids: Vec<u64>,
+}
+
+impl Part {
+    /// Build a part from `(time, event)` pairs such as `("0:0:0", "C4")`.
+    pub fn new<C, I, T, V>(callback: C, events: I) -> Self
+    where
+        C: Fn(f64, &str) + 'static,
+        I: IntoIterator<Item = (T, V)>,
+        T: IntoTime,
+        V: Into<String>,
+    {
+        Self {
+            callback: Rc::new(callback),
+            events: events
+                .into_iter()
+                .map(|(when, value)| (when.into_time(), value.into()))
+                .collect(),
+            ids: Vec::new(),
+        }
+    }
+
+    /// Schedule each event at `offset + to_seconds(when)` on `transport`.
+    ///
+    /// Replaces any previous attachment (stops first). Returns `self` for
+    /// chaining. Accepts [`Transport`] or [`TransportRef`].
+    pub fn start(
+        &mut self,
+        transport: &mut impl SequenceClock,
+        offset: impl IntoTime,
+    ) -> Result<&mut Self, TransportError> {
+        self.stop(transport);
+        let base = transport.to_seconds(offset.into_time())?;
+        let mut ids = Vec::with_capacity(self.events.len());
+        for (when, value) in &self.events {
+            let at = match transport.to_seconds(when.clone()) {
+                Ok(seconds) => base + seconds,
+                Err(err) => {
+                    transport.cancel_ids(&ids);
+                    return Err(err.into());
+                }
+            };
+            let callback = Rc::clone(&self.callback);
+            let value = value.clone();
+            match transport.schedule(move |time| callback(time, value.as_str()), at) {
+                Ok(id) => ids.push(id),
+                Err(err) => {
+                    transport.cancel_ids(&ids);
+                    return Err(err);
+                }
+            }
+        }
+        self.ids = ids;
+        Ok(self)
+    }
+
+    /// Detach from `transport` by cancelling this part's scheduled ids.
+    pub fn stop(&mut self, transport: &mut impl SequenceClock) -> &mut Self {
+        transport.cancel_ids(&self.ids);
+        self.ids.clear();
+        self
+    }
+}
+
+/// Repeating callback attached to a [`SequenceClock`].
+///
+/// `.start(offset)` registers one `schedule_repeat`; callbacks stay silent
+/// until `transport.start()` / [`Transport::fire_until`] / later render.
+pub struct Loop {
+    callback: Rc<dyn Fn(f64)>,
+    interval: TimeValue,
+    ids: Vec<u64>,
+}
+
+impl Loop {
+    /// Build a loop that fires `callback` every `interval`.
+    pub fn new(callback: impl Fn(f64) + 'static, interval: impl IntoTime) -> Self {
+        Self {
+            callback: Rc::new(callback),
+            interval: interval.into_time(),
+            ids: Vec::new(),
+        }
+    }
+
+    /// `schedule_repeat(callback, interval, start_time=offset)` on `transport`.
+    ///
+    /// Replaces any previous attachment (stops first). Returns `self` for
+    /// chaining. Accepts [`Transport`] or [`TransportRef`].
+    pub fn start(
+        &mut self,
+        transport: &mut impl SequenceClock,
+        offset: impl IntoTime,
+    ) -> Result<&mut Self, TransportError> {
+        self.stop(transport);
+        let start = transport.to_seconds(offset.into_time())?;
+        let interval = transport.to_seconds(self.interval.clone())?;
+        let callback = Rc::clone(&self.callback);
+        let id = transport.schedule_repeat(move |time| callback(time), interval, start)?;
+        self.ids = vec![id];
+        Ok(self)
+    }
+
+    /// Detach from `transport` by cancelling this loop's scheduled id.
+    pub fn stop(&mut self, transport: &mut impl SequenceClock) -> &mut Self {
+        transport.cancel_ids(&self.ids);
+        self.ids.clear();
+        self
+    }
 }
