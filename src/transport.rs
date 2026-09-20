@@ -5,18 +5,54 @@ use crate::limits::{BPM_MAX, BPM_MIN, DEFAULT_PPQ};
 use crate::sink::Sink;
 use crate::time::{to_frequency, to_seconds, to_ticks, IntoTime, TimeError};
 
+type EventCallback = Box<dyn Fn(f64) + 'static>;
+
+#[derive(Clone, Copy)]
+enum TransportEvent {
+    Start,
+    Stop,
+    Pause,
+    Loop,
+}
+
+fn parse_event(name: &str) -> Result<TransportEvent, TransportError> {
+    match name {
+        "start" => Ok(TransportEvent::Start),
+        "stop" => Ok(TransportEvent::Stop),
+        "pause" => Ok(TransportEvent::Pause),
+        "loop" => Ok(TransportEvent::Loop),
+        _ => Err(TransportError::UnknownEvent(name.to_string())),
+    }
+}
+
+/// Wrap `seconds` into `[start, end)` when the loop range is valid.
+fn wrap_into_loop(seconds: f64, start: f64, end: f64) -> f64 {
+    let length = end - start;
+    if length > 0.0 {
+        start + (seconds - start).rem_euclid(length)
+    } else {
+        seconds
+    }
+}
+
 /// Arrangement clock owned by [`crate::Context`].
 ///
 /// Start, stop, pause, and tempo writes that also touch the sink go through
 /// [`TransportRef`], so one borrow can mark the sink accepted and stop it
 /// without closing.
-#[derive(Debug)]
 pub struct Transport {
     state: TransportState,
     bpm: f64,
     running_bpm: f64,
     time_signature: (u32, u32),
     seconds: f64,
+    looping: bool,
+    loop_start_s: f64,
+    loop_end_s: f64,
+    on_start: Vec<EventCallback>,
+    on_stop: Vec<EventCallback>,
+    on_pause: Vec<EventCallback>,
+    on_loop: Vec<EventCallback>,
 }
 
 /// Playhead lifecycle: stopped, started, or paused.
@@ -30,13 +66,19 @@ pub enum TransportState {
     Paused,
 }
 
-/// Tempo or time-signature write that drywet-py would raise as `ValueError`.
+/// Tempo, loop, or event write that drywet-py would raise as `ValueError`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransportError {
     /// Tempo was outside 40–240 BPM.
     InvalidBpm(f64),
     /// Signature was not a positive `(n, d)` pair or a positive beat count.
     InvalidTimeSignature,
+    /// `set_loop_points` end was not strictly after start.
+    InvalidLoopPoints,
+    /// `on` was given a name other than `start` / `stop` / `pause` / `loop`.
+    UnknownEvent(String),
+    /// Musical time conversion failed (for example in `set_loop_points`).
+    Time(TimeError),
 }
 
 impl fmt::Display for TransportError {
@@ -46,11 +88,32 @@ impl fmt::Display for TransportError {
             TransportError::InvalidTimeSignature => {
                 write!(f, "time_signature must be (n, d) or a positive int")
             }
+            TransportError::InvalidLoopPoints => {
+                write!(f, "loop_end must be after loop_start")
+            }
+            TransportError::UnknownEvent(name) => write!(f, "unknown event: {name:?}"),
+            TransportError::Time(err) => write!(f, "{err}"),
         }
     }
 }
 
-impl Error for TransportError {}
+impl Error for TransportError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            TransportError::Time(err) => Some(err),
+            TransportError::InvalidBpm(_)
+            | TransportError::InvalidTimeSignature
+            | TransportError::InvalidLoopPoints
+            | TransportError::UnknownEvent(_) => None,
+        }
+    }
+}
+
+impl From<TimeError> for TransportError {
+    fn from(err: TimeError) -> Self {
+        TransportError::Time(err)
+    }
+}
 
 /// Time-signature input: beat count (`4` → `(4, 4)`) or an `(n, d)` pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +185,21 @@ fn bars_beats_sixteenths(seconds: f64, bpm: f64, time_signature: (u32, u32)) -> 
     format!("{bars}:{beats}:{sixteenths}")
 }
 
+impl fmt::Debug for Transport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Transport")
+            .field("state", &self.state)
+            .field("bpm", &self.bpm)
+            .field("running_bpm", &self.running_bpm)
+            .field("time_signature", &self.time_signature)
+            .field("seconds", &self.seconds)
+            .field("loop", &self.looping)
+            .field("loop_start", &self.loop_start_s)
+            .field("loop_end", &self.loop_end_s)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Transport {
     /// Stopped transport at 120 BPM, 4/4, playhead at zero.
     pub fn new() -> Self {
@@ -131,6 +209,13 @@ impl Transport {
             running_bpm: 120.0,
             time_signature: (4, 4),
             seconds: 0.0,
+            looping: false,
+            loop_start_s: 0.0,
+            loop_end_s: 0.0,
+            on_start: Vec::new(),
+            on_stop: Vec::new(),
+            on_pause: Vec::new(),
+            on_loop: Vec::new(),
         }
     }
 
@@ -186,8 +271,90 @@ impl Transport {
     }
 
     /// Set the playhead in seconds. Tests use this until render advances frames.
+    ///
+    /// When looping and the loop range is valid, wraps into `[loop_start, loop_end)`.
     pub fn set_seconds(&mut self, seconds: f64) {
         self.seconds = seconds;
+        self.apply_loop_wrap();
+    }
+
+    /// Whether the playhead wraps between [`loop_start`](Self::loop_start) and
+    /// [`loop_end`](Self::loop_end). Render (later) also mixes the last tail
+    /// into the next cycle; cycle length stays nominal.
+    pub fn r#loop(&self) -> bool {
+        self.looping
+    }
+
+    /// Enable or disable looping. When enabled, wraps the current playhead
+    /// into the loop range if that range is valid.
+    pub fn set_loop(&mut self, enabled: bool) {
+        self.looping = enabled;
+        self.apply_loop_wrap();
+    }
+
+    /// Loop start in seconds.
+    pub fn loop_start(&self) -> f64 {
+        self.loop_start_s
+    }
+
+    /// Loop end in seconds.
+    pub fn loop_end(&self) -> f64 {
+        self.loop_end_s
+    }
+
+    /// Set loop start and end from musical times. `end` must be after `start`.
+    pub fn set_loop_points(
+        &mut self,
+        start: impl IntoTime,
+        end: impl IntoTime,
+    ) -> Result<(), TransportError> {
+        let start_s = self.to_seconds(start)?;
+        let end_s = self.to_seconds(end)?;
+        if end_s <= start_s {
+            return Err(TransportError::InvalidLoopPoints);
+        }
+        self.loop_start_s = start_s;
+        self.loop_end_s = end_s;
+        self.apply_loop_wrap();
+        Ok(())
+    }
+
+    /// Register a callback for `start`, `stop`, `pause`, or `loop`.
+    ///
+    /// Callbacks receive the event time in seconds. Hosts may ignore events
+    /// and poll [`position`](Self::position) instead.
+    pub fn on(
+        &mut self,
+        name: &str,
+        callback: impl Fn(f64) + 'static,
+    ) -> Result<(), TransportError> {
+        let slot = match parse_event(name)? {
+            TransportEvent::Start => &mut self.on_start,
+            TransportEvent::Stop => &mut self.on_stop,
+            TransportEvent::Pause => &mut self.on_pause,
+            TransportEvent::Loop => &mut self.on_loop,
+        };
+        slot.push(Box::new(callback));
+        Ok(())
+    }
+
+    fn apply_loop_wrap(&mut self) {
+        if self.looping {
+            self.seconds = wrap_into_loop(self.seconds, self.loop_start_s, self.loop_end_s);
+        }
+    }
+
+    fn emit(&self, event: TransportEvent) {
+        let time = self.seconds;
+        let slot = match event {
+            TransportEvent::Start => &self.on_start,
+            TransportEvent::Stop => &self.on_stop,
+            TransportEvent::Pause => &self.on_pause,
+            TransportEvent::Loop => &self.on_loop,
+        };
+        for callback in slot {
+            callback(time);
+        }
     }
 
     /// Playhead in PPQ ticks: `to_ticks(seconds)` at [`DEFAULT_PPQ`].
@@ -239,12 +406,14 @@ impl Transport {
             TransportState::Started => false,
             TransportState::Paused => {
                 self.state = TransportState::Started;
+                self.emit(TransportEvent::Start);
                 false
             }
             TransportState::Stopped => {
                 self.running_bpm = self.bpm;
                 self.state = TransportState::Started;
                 self.seconds = 0.0;
+                self.emit(TransportEvent::Start);
                 true
             }
         }
@@ -253,12 +422,14 @@ impl Transport {
     fn pause(&mut self) {
         if self.state == TransportState::Started {
             self.state = TransportState::Paused;
+            self.emit(TransportEvent::Pause);
         }
     }
 
     fn stop(&mut self) {
         self.state = TransportState::Stopped;
         self.seconds = 0.0;
+        self.emit(TransportEvent::Stop);
     }
 }
 
@@ -360,8 +531,52 @@ impl<'a, S: Sink> TransportRef<'a, S> {
     }
 
     /// Set the playhead in seconds. Tests use this until render advances frames.
+    ///
+    /// When looping and the loop range is valid, wraps into `[loop_start, loop_end)`.
     pub fn set_seconds(&mut self, seconds: f64) {
         self.transport.set_seconds(seconds);
+    }
+
+    /// Whether the playhead wraps between [`loop_start`](Self::loop_start) and
+    /// [`loop_end`](Self::loop_end).
+    pub fn r#loop(&self) -> bool {
+        self.transport.r#loop()
+    }
+
+    /// Enable or disable looping. When enabled, wraps the current playhead
+    /// into the loop range if that range is valid.
+    pub fn set_loop(&mut self, enabled: bool) {
+        self.transport.set_loop(enabled);
+    }
+
+    /// Loop start in seconds.
+    pub fn loop_start(&self) -> f64 {
+        self.transport.loop_start()
+    }
+
+    /// Loop end in seconds.
+    pub fn loop_end(&self) -> f64 {
+        self.transport.loop_end()
+    }
+
+    /// Set loop start and end from musical times. `end` must be after `start`.
+    pub fn set_loop_points(
+        &mut self,
+        start: impl IntoTime,
+        end: impl IntoTime,
+    ) -> Result<(), TransportError> {
+        self.transport.set_loop_points(start, end)
+    }
+
+    /// Register a callback for `start`, `stop`, `pause`, or `loop`.
+    ///
+    /// Callbacks receive the event time in seconds.
+    pub fn on(
+        &mut self,
+        name: &str,
+        callback: impl Fn(f64) + 'static,
+    ) -> Result<(), TransportError> {
+        self.transport.on(name, callback)
     }
 
     /// Playhead in PPQ ticks: `to_ticks(seconds)` at [`DEFAULT_PPQ`].
