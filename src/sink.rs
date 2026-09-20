@@ -39,6 +39,12 @@ pub trait Sink {
     /// reports accepted immediately when the clock starts.
     fn mark_accepted(&mut self) {}
 
+    /// Open the destination clock if the sink has one. Default is a no-op.
+    ///
+    /// [`crate::sink::PipeWireSink`] opens the persistent stream.
+    /// [`BufferSink`] stays silent so the engine can always call this.
+    fn start_clock(&mut self) {}
+
     /// Interleaved buffer contents. Empty for sinks that do not buffer.
     ///
     /// [`crate::transport::TransportRef::render`] copies this after padding.

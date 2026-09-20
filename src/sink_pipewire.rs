@@ -461,6 +461,10 @@ impl<B: StreamBackend> crate::sink::Sink for PipeWireSink<B> {
         PipeWireSink::mark_accepted(self);
     }
 
+    fn start_clock(&mut self) {
+        PipeWireSink::start_clock(self);
+    }
+
     fn frames(&self) -> &[f32] {
         PipeWireSink::frames(self)
     }
