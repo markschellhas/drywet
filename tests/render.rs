@@ -84,6 +84,37 @@ fn render_loop_repeats_hits() {
     assert!(hits.borrow().len() >= 3);
 }
 
+/// A one-shot inside the loop range fires on later cycles. Expansion is
+/// virtual: a second `render` of the same duration does not fire again.
+#[test]
+fn render_loop_oneshot_repeats_and_is_idempotent() {
+    let ctx = Context::new();
+    {
+        let mut t = ctx.transport();
+        t.set_loop(true);
+        t.set_loop_points(0, 0.5).unwrap();
+    }
+
+    let hits = Rc::new(RefCell::new(Vec::<f64>::new()));
+    let collected = Rc::clone(&hits);
+    ctx.transport()
+        .schedule(move |time| collected.borrow_mut().push(time), 0)
+        .unwrap();
+
+    ctx.render(1.5).unwrap();
+    {
+        let hits = hits.borrow();
+        assert!(hits.len() >= 3);
+        assert!(hits.iter().any(|&t| (t - 0.0).abs() < 1e-9));
+        assert!(hits.iter().any(|&t| (t - 0.5).abs() < 1e-9));
+        assert!(hits.iter().any(|&t| (t - 1.0).abs() < 1e-9));
+    }
+
+    let n = hits.borrow().len();
+    ctx.render(1.5).unwrap();
+    assert_eq!(hits.borrow().len(), n);
+}
+
 /// `render` starts if needed, pads the buffer, and leaves the playhead at
 /// the converted duration.
 #[test]

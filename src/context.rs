@@ -94,7 +94,6 @@ impl<S: Sink> Context<S> {
             }
         }
         let until = self.transport.borrow().to_seconds(duration)?;
-        self.transport.borrow_mut().expand_loop_one_shots(until);
         fire_until_releasing(&self.transport, until)?;
         let needed = (until * f64::from(self.sample_rate)).round() as usize;
         let mut sink = self.sink.borrow_mut();

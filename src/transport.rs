@@ -575,18 +575,33 @@ impl Transport {
     }
 
     /// Occurrences of `event` at or before `until` (drywet-py `_occurrences`).
+    ///
+    /// When looping is on and a one-shot sits in `[loop_start, loop_end)`,
+    /// also yield `start + n * length` while `<= until`. Virtual — the
+    /// event list is not mutated, so a second fire/render is idempotent.
     fn occurrences(
         start: f64,
         interval: Option<f64>,
         until: f64,
+        looping: bool,
+        loop_start: f64,
+        loop_end: f64,
     ) -> Result<Vec<f64>, TransportError> {
         match interval {
             None => {
+                let mut times = Vec::new();
                 if start <= until + OCCURRENCE_EPS {
-                    Ok(vec![start])
-                } else {
-                    Ok(Vec::new())
+                    times.push(start);
                 }
+                if looping && loop_end > loop_start && loop_start <= start && start < loop_end {
+                    let length = loop_end - loop_start;
+                    let mut cursor = start + length;
+                    while cursor <= until + OCCURRENCE_EPS {
+                        times.push(cursor);
+                        cursor += length;
+                    }
+                }
+                Ok(times)
             }
             Some(interval) => {
                 if interval <= 0.0 {
@@ -603,39 +618,6 @@ impl Transport {
         }
     }
 
-    /// Clone one-shot events that fall in the loop range across each cycle
-    /// through `until` (drywet-py `render` loop expansion).
-    pub(crate) fn expand_loop_one_shots(&mut self, until: f64) {
-        if !(self.looping && self.loop_end_s > self.loop_start_s) {
-            return;
-        }
-        let length = self.loop_end_s - self.loop_start_s;
-        let loop_start = self.loop_start_s;
-        let loop_end = self.loop_end_s;
-        let mut repeats = Vec::new();
-        for event in &self.events {
-            if event.interval.is_some() {
-                continue;
-            }
-            if loop_start <= event.time && event.time < loop_end {
-                let mut cursor = event.time + length;
-                while cursor <= until + OCCURRENCE_EPS {
-                    repeats.push((cursor, Rc::clone(&event.callback)));
-                    cursor += length;
-                }
-            }
-        }
-        for (time, callback) in repeats {
-            let id = self.next_id();
-            self.events.push(ScheduledEvent {
-                id,
-                time,
-                callback,
-                interval: None,
-            });
-        }
-    }
-
     /// Unfired `(when, callback, key)` pairs at or before `until_s`, sorted.
     pub(crate) fn collect_due(
         &mut self,
@@ -643,7 +625,14 @@ impl Transport {
     ) -> Result<Vec<(f64, ScheduleCallback, FiredKey)>, TransportError> {
         let mut pending: Vec<(f64, u64, ScheduleCallback, FiredKey)> = Vec::new();
         for event in &self.events {
-            for when in Self::occurrences(event.time, event.interval, until_s)? {
+            for when in Self::occurrences(
+                event.time,
+                event.interval,
+                until_s,
+                self.looping,
+                self.loop_start_s,
+                self.loop_end_s,
+            )? {
                 let key = fired_key(event.id, when);
                 if self.fired.contains(&key) {
                     continue;
