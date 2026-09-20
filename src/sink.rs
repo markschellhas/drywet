@@ -1,5 +1,9 @@
 use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 
+pub use crate::sink_pipewire::{
+    latency_ms_from_quantum, MockStream, PipeWireSink, StreamBackend, DEFAULT_QUANTUM_FRAMES,
+};
+
 /// PCM destination shared by [`BufferSink`] and later live backends.
 ///
 /// Methods stay object-safe (`&[f32]`, no generics) so a `dyn Sink` can be
