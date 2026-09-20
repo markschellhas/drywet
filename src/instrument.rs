@@ -14,11 +14,13 @@ const ATTACK_SECONDS: f64 = 0.01;
 const RELEASE_SECONDS: f64 = 0.05;
 const TRIGGER_ATTACK_SECONDS: f64 = 1.0;
 
-/// Failure triggering a voice (polyphony cap, bad note, or bad time).
+/// Failure triggering a voice (polyphony cap, unknown drum, bad note, or bad time).
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstrumentError {
     /// [`Synth::trigger_attack`] would exceed [`Synth::with_max_voices`].
     VoiceLimitExceeded,
+    /// [`Drum::trigger`] name was not kick, snare, hat, or a hat alias.
+    UnknownDrum(String),
     /// Note-name or MIDI conversion failed.
     Pitch(PitchError),
     /// Duration or start-time conversion failed.
@@ -29,6 +31,7 @@ impl fmt::Display for InstrumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InstrumentError::VoiceLimitExceeded => write!(f, "voice limit exceeded"),
+            InstrumentError::UnknownDrum(name) => write!(f, "unknown drum: {name:?}"),
             InstrumentError::Pitch(err) => write!(f, "{err}"),
             InstrumentError::Time(err) => write!(f, "{err}"),
         }
@@ -40,7 +43,7 @@ impl Error for InstrumentError {
         match self {
             InstrumentError::Pitch(err) => Some(err),
             InstrumentError::Time(err) => Some(err),
-            InstrumentError::VoiceLimitExceeded => None,
+            InstrumentError::VoiceLimitExceeded | InstrumentError::UnknownDrum(_) => None,
         }
     }
 }
@@ -180,17 +183,97 @@ impl Synth {
             Some(value) => ctx.transport().to_seconds(value)?,
             None => TRIGGER_ATTACK_SECONDS,
         };
-        let at_sample = match time {
-            None => None,
-            Some(value) => {
-                let seconds = ctx.transport().to_seconds(value)?;
-                Some((seconds * f64::from(ctx.sample_rate())).round() as usize)
-            }
-        };
         let frames = render_additive(freq, duration_s, self.sample_rate);
-        ctx.sink_mut().mix(&frames, at_sample);
-        Ok(())
+        mix_at_time(ctx, &frames, time)
     }
+}
+
+/// One-shot kick / snare / hat transients mixed onto the context sink.
+///
+/// Names are `kick`, `snare`, and `hat` (`hi-hat` / `hihat` alias hat).
+/// `time = None` mixes at the write cursor. Hits are short; release is a no-op.
+#[derive(Debug)]
+pub struct Drum {
+    sample_rate: u32,
+}
+
+impl Drum {
+    /// Sample rate from `ctx.sample_rate()`.
+    pub fn new<S: Sink>(ctx: &Context<S>) -> Self {
+        Self {
+            sample_rate: ctx.sample_rate(),
+        }
+    }
+
+    /// Sixteenth-note steps in one bar: `numerator * 16 / denominator`.
+    pub fn steps_per_bar(time_signature: (u32, u32)) -> u32 {
+        let (numerator, denominator) = time_signature;
+        numerator * 16 / denominator
+    }
+
+    /// Mix a named drum hit at `time`.
+    pub fn trigger<S: Sink>(
+        &mut self,
+        ctx: &mut Context<S>,
+        name: &str,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError> {
+        let frames = render_drum(name, self.sample_rate)?;
+        mix_at_time(ctx, &frames, time)?;
+        Ok(self)
+    }
+
+    /// Alias of [`Drum::trigger`].
+    pub fn trigger_attack<S: Sink>(
+        &mut self,
+        ctx: &mut Context<S>,
+        name: &str,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError> {
+        self.trigger(ctx, name, time)
+    }
+
+    /// No-op. Drum hits are one-shot transients.
+    pub fn trigger_release(&mut self, _name: &str, _time: Option<TimeValue>) -> &mut Self {
+        self
+    }
+
+    /// Alias of [`Drum::trigger`]. `duration` is ignored.
+    pub fn trigger_attack_release<S, D>(
+        &mut self,
+        ctx: &mut Context<S>,
+        name: &str,
+        _duration: D,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError>
+    where
+        S: Sink,
+        D: IntoTime,
+    {
+        self.trigger(ctx, name, time)
+    }
+
+    /// No-op. Drum hits are one-shot transients.
+    pub fn release_all(&mut self, _time: Option<TimeValue>) -> &mut Self {
+        self
+    }
+}
+
+/// Mix `frames` at `time`, or at the write cursor when `time` is `None`.
+fn mix_at_time<S: Sink>(
+    ctx: &mut Context<S>,
+    frames: &[f32],
+    time: Option<TimeValue>,
+) -> Result<(), InstrumentError> {
+    let at_sample = match time {
+        None => None,
+        Some(value) => {
+            let seconds = ctx.transport().to_seconds(value)?;
+            Some((seconds * f64::from(ctx.sample_rate())).round() as usize)
+        }
+    };
+    ctx.sink_mut().mix(frames, at_sample);
+    Ok(())
 }
 
 fn envelope(index: usize, n: usize, attack: usize, release: usize) -> f64 {
@@ -235,6 +318,67 @@ fn render_additive(freq: f64, duration: f64, sample_rate: u32) -> Vec<f32> {
             sample += amp * (2.0 * PI * freq * harmonic * t).sin();
         }
         frames.push((sample * env * GAIN) as f32);
+    }
+    frames
+}
+
+fn drum_len(duration: f64, sample_rate: u32) -> usize {
+    (duration * f64::from(sample_rate)).round().max(1.0) as usize
+}
+
+fn lcg_noise(seed: &mut u32) -> f64 {
+    *seed = 1103515245u32.wrapping_mul(*seed).wrapping_add(12345) & 0x7FFF_FFFF;
+    (f64::from(*seed) / f64::from(0x7FFF_FFFF)) * 2.0 - 1.0
+}
+
+fn render_drum(name: &str, sample_rate: u32) -> Result<Vec<f32>, InstrumentError> {
+    match name.to_ascii_lowercase().as_str() {
+        "kick" => Ok(render_kick(sample_rate)),
+        "snare" => Ok(render_snare(sample_rate)),
+        "hat" | "hi-hat" | "hihat" => Ok(render_hat(sample_rate)),
+        _ => Err(InstrumentError::UnknownDrum(name.to_string())),
+    }
+}
+
+/// Port of drywet-py `render_kick`.
+fn render_kick(sample_rate: u32) -> Vec<f32> {
+    let sr = f64::from(sample_rate);
+    let n = drum_len(0.22, sample_rate);
+    let mut frames = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = i as f64 / sr;
+        let env = 1.0 - (i as f64 / n as f64);
+        let freq = 150.0 * (40.0_f64 / 150.0).powf(i as f64 / n as f64);
+        frames.push(((2.0 * PI * freq * t).sin() * env * 0.7) as f32);
+    }
+    frames
+}
+
+/// Port of drywet-py `render_snare`.
+fn render_snare(sample_rate: u32) -> Vec<f32> {
+    let sr = f64::from(sample_rate);
+    let n = drum_len(0.16, sample_rate);
+    let mut frames = Vec::with_capacity(n);
+    let mut seed = 1_234_567u32;
+    for i in 0..n {
+        let t = i as f64 / sr;
+        let env = 1.0 - (i as f64 / n as f64);
+        let noise = lcg_noise(&mut seed);
+        let tone = (2.0 * PI * 180.0 * t).sin();
+        frames.push(((0.65 * noise + 0.35 * tone) * env * 0.45) as f32);
+    }
+    frames
+}
+
+/// Port of drywet-py `render_hat`.
+fn render_hat(sample_rate: u32) -> Vec<f32> {
+    let n = drum_len(0.05, sample_rate);
+    let mut frames = Vec::with_capacity(n);
+    let mut seed = 7_654_321u32;
+    for i in 0..n {
+        let env = 1.0 - (i as f64 / n as f64);
+        let noise = lcg_noise(&mut seed);
+        frames.push((noise * env * 0.28) as f32);
     }
     frames
 }
