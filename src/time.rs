@@ -47,6 +47,54 @@ pub enum TimeValue {
     Text(String),
 }
 
+impl From<f64> for TimeValue {
+    fn from(value: f64) -> Self {
+        TimeValue::Numeric(value)
+    }
+}
+
+impl From<f32> for TimeValue {
+    fn from(value: f32) -> Self {
+        TimeValue::Numeric(f64::from(value))
+    }
+}
+
+impl From<i32> for TimeValue {
+    fn from(value: i32) -> Self {
+        TimeValue::Numeric(f64::from(value))
+    }
+}
+
+impl From<u32> for TimeValue {
+    fn from(value: u32) -> Self {
+        TimeValue::Numeric(f64::from(value))
+    }
+}
+
+impl From<i64> for TimeValue {
+    fn from(value: i64) -> Self {
+        TimeValue::Numeric(value as f64)
+    }
+}
+
+impl From<&str> for TimeValue {
+    fn from(value: &str) -> Self {
+        TimeValue::Text(value.to_string())
+    }
+}
+
+impl From<String> for TimeValue {
+    fn from(value: String) -> Self {
+        TimeValue::Text(value)
+    }
+}
+
+impl From<&String> for TimeValue {
+    fn from(value: &String) -> Self {
+        TimeValue::Text(value.clone())
+    }
+}
+
 /// Seconds, Hz, or a Tone-style time / scientific note string.
 pub trait IntoTime {
     fn into_time(self) -> TimeValue;
@@ -60,49 +108,49 @@ impl IntoTime for TimeValue {
 
 impl IntoTime for &str {
     fn into_time(self) -> TimeValue {
-        TimeValue::Text(self.to_string())
+        self.into()
     }
 }
 
 impl IntoTime for String {
     fn into_time(self) -> TimeValue {
-        TimeValue::Text(self)
+        self.into()
     }
 }
 
 impl IntoTime for &String {
     fn into_time(self) -> TimeValue {
-        TimeValue::Text(self.clone())
+        self.into()
     }
 }
 
 impl IntoTime for f64 {
     fn into_time(self) -> TimeValue {
-        TimeValue::Numeric(self)
+        self.into()
     }
 }
 
 impl IntoTime for f32 {
     fn into_time(self) -> TimeValue {
-        TimeValue::Numeric(f64::from(self))
+        self.into()
     }
 }
 
 impl IntoTime for i32 {
     fn into_time(self) -> TimeValue {
-        TimeValue::Numeric(f64::from(self))
+        self.into()
     }
 }
 
 impl IntoTime for u32 {
     fn into_time(self) -> TimeValue {
-        TimeValue::Numeric(f64::from(self))
+        self.into()
     }
 }
 
 impl IntoTime for i64 {
     fn into_time(self) -> TimeValue {
-        TimeValue::Numeric(self as f64)
+        self.into()
     }
 }
 

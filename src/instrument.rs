@@ -6,7 +6,7 @@ use crate::context::Context;
 use crate::limits::DEFAULT_MAX_VOICES;
 use crate::pitch::{midi_to_hz, IntoNote, PitchError};
 use crate::sink::Sink;
-use crate::time::{IntoTime, TimeError};
+use crate::time::{IntoTime, TimeError, TimeValue};
 
 const HARMONICS: [f64; 4] = [1.0, 0.35, 0.18, 0.08];
 const GAIN: f64 = 0.18;
@@ -93,18 +93,17 @@ impl Synth {
     ///
     /// Duration and time convert via [`crate::transport::TransportRef::to_seconds`].
     /// `time = None` mixes at the write cursor.
-    pub fn trigger_attack_release<S, N, D, T>(
+    pub fn trigger_attack_release<S, N, D>(
         &mut self,
         ctx: &mut Context<S>,
         note: N,
         duration: D,
-        time: Option<T>,
+        time: Option<TimeValue>,
     ) -> Result<&mut Self, InstrumentError>
     where
         S: Sink,
         N: IntoNote,
         D: IntoTime,
-        T: IntoTime,
     {
         self.acquire()?;
         let result = self.mix_note(ctx, note, Some(duration), time);
@@ -113,16 +112,15 @@ impl Synth {
     }
 
     /// Acquire a voice and mix a 1.0s additive note (heritage one-shot).
-    pub fn trigger_attack<S, N, T>(
+    pub fn trigger_attack<S, N>(
         &mut self,
         ctx: &mut Context<S>,
         note: N,
-        time: Option<T>,
+        time: Option<TimeValue>,
     ) -> Result<&mut Self, InstrumentError>
     where
         S: Sink,
         N: IntoNote,
-        T: IntoTime,
     {
         self.acquire()?;
         match self.mix_note(ctx, note, None::<f64>, time) {
@@ -135,22 +133,18 @@ impl Synth {
     }
 
     /// Decrement the voice count. v1 one-shot does not silence already-mixed PCM.
-    pub fn trigger_release<N, T>(
+    pub fn trigger_release(
         &mut self,
-        note: N,
-        _time: Option<T>,
-    ) -> Result<&mut Self, InstrumentError>
-    where
-        N: IntoNote,
-        T: IntoTime,
-    {
+        note: impl IntoNote,
+        _time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError> {
         let _midi = note.into_midi()?;
         self.release_voice();
         Ok(self)
     }
 
     /// Drop every counted voice. v1 one-shot does not silence already-mixed PCM.
-    pub fn release_all<T: IntoTime>(&mut self, _time: Option<T>) -> &mut Self {
+    pub fn release_all(&mut self, _time: Option<TimeValue>) -> &mut Self {
         self.active_voices = 0;
         self
     }
@@ -169,18 +163,17 @@ impl Synth {
         }
     }
 
-    fn mix_note<S, N, D, T>(
+    fn mix_note<S, N, D>(
         &self,
         ctx: &mut Context<S>,
         note: N,
         duration: Option<D>,
-        time: Option<T>,
+        time: Option<TimeValue>,
     ) -> Result<(), InstrumentError>
     where
         S: Sink,
         N: IntoNote,
         D: IntoTime,
-        T: IntoTime,
     {
         let freq = midi_to_hz(note)?;
         let duration_s = match duration {
