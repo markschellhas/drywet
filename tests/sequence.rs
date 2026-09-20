@@ -16,7 +16,7 @@ fn approx_eq(got: f64, expected: f64) {
 /// fire_until("1m"); notes C4 E4 G4 B4; second hit time ≈ 0.5.
 #[test]
 fn sequence_quarter_notes_fire_until_one_measure() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     ctx.transport().set_bpm(120.0).unwrap();
 
     let hits = Rc::new(RefCell::new(Vec::<(f64, String)>::new()));
@@ -45,7 +45,7 @@ fn sequence_quarter_notes_fire_until_one_measure() {
 /// Heritage test 2: nested [C4, [E4, G4], None, B4] → C4 E4 G4 B4 (None is rest).
 #[test]
 fn sequence_nested_list_subdivides_and_rests() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     ctx.transport().set_bpm(120.0).unwrap();
 
     let hits = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -71,7 +71,7 @@ fn sequence_nested_list_subdivides_and_rests() {
 /// Heritage test 3: start then stop then fire_until → no hits.
 #[test]
 fn sequence_stop_cancels_scheduled_hits() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let hits = Rc::new(RefCell::new(Vec::<String>::new()));
     let collected = Rc::clone(&hits);
     let mut seq = Sequence::new(
@@ -92,7 +92,7 @@ fn sequence_stop_cancels_scheduled_hits() {
 /// wipe an unrelated schedule).
 #[test]
 fn sequence_stop_leaves_other_transport_events() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let seq_hits = Rc::new(RefCell::new(Vec::<&'static str>::new()));
     let other_hits = Rc::new(RefCell::new(Vec::<&'static str>::new()));
 

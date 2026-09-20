@@ -22,7 +22,7 @@ fn record(
 
 #[test]
 fn transport_loop_points_and_events() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.set_bpm(120.0).unwrap();
 
@@ -47,7 +47,7 @@ fn transport_loop_points_and_events() {
 
 #[test]
 fn transport_loop_set_loop_points_validates() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     assert_eq!(
         ctx.transport().set_loop_points("1m", "0:0:0"),
         Err(TransportError::InvalidLoopPoints)
@@ -56,7 +56,7 @@ fn transport_loop_set_loop_points_validates() {
 
 #[test]
 fn transport_loop_unknown_event_is_err() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     assert_eq!(
         ctx.transport().on("nope", |_| {}),
         Err(TransportError::UnknownEvent("nope".into()))
@@ -65,7 +65,7 @@ fn transport_loop_unknown_event_is_err() {
 
 #[test]
 fn transport_loop_set_loop_points_invalid_time() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     assert_eq!(
         ctx.transport().set_loop_points("not-a-time", "1m"),
         Err(TransportError::Time(TimeError::InvalidTime(
@@ -76,7 +76,7 @@ fn transport_loop_set_loop_points_invalid_time() {
 
 #[test]
 fn transport_loop_set_seconds_wraps_when_enabled() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.set_bpm(120.0).unwrap();
     t.set_loop_points("0:0:0", "1:0:0").unwrap();

@@ -42,7 +42,7 @@ impl Sink for ProbeSink {
 
 #[test]
 fn transport_state_start_stop_pause_toggle_and_playhead() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     {
         let mut t = ctx.transport();
         assert_eq!(t.state(), TransportState::Stopped);
@@ -65,7 +65,7 @@ fn transport_state_start_stop_pause_toggle_and_playhead() {
 
 #[test]
 fn transport_state_start_is_idempotent_and_stop_keeps_sink_open() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     ctx.transport().start();
     ctx.transport().start();
     assert_eq!(ctx.transport().state(), TransportState::Started);
@@ -82,7 +82,7 @@ fn transport_state_start_marks_sink_accepted_and_reads_latency() {
         latency_ms: 12,
         ..ProbeSink::default()
     };
-    let mut ctx = Context::with(44100, 1, sink);
+    let ctx = Context::with(44100, 1, sink);
     assert!(!ctx.sink().accepted());
     assert_eq!(ctx.transport().latency_ms(), 12);
     ctx.transport().start();
@@ -96,7 +96,7 @@ fn transport_state_start_marks_sink_accepted_and_reads_latency() {
 
 #[test]
 fn transport_state_defaults_bpm_and_signature() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let t = ctx.transport();
     assert_eq!(t.bpm(), 120.0);
     assert_eq!(t.clock_bpm(), 120.0);
@@ -107,7 +107,7 @@ fn transport_state_defaults_bpm_and_signature() {
 
 #[test]
 fn transport_state_bpm_bounds() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.set_bpm(100.0).unwrap();
     assert_eq!(t.set_bpm(39.0), Err(TransportError::InvalidBpm(39.0)));
@@ -120,7 +120,7 @@ fn transport_state_bpm_bounds() {
 
 #[test]
 fn transport_state_bpm_written_while_started_applies_on_next_start() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.set_bpm(100.0).unwrap();
     t.start();
@@ -135,7 +135,7 @@ fn transport_state_bpm_written_while_started_applies_on_next_start() {
 
 #[test]
 fn transport_state_time_signature_int_and_pair() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.set_time_signature(4).unwrap();
     assert_eq!(t.time_signature(), (4, 4));
@@ -159,7 +159,7 @@ fn transport_state_time_signature_int_and_pair() {
 
 #[test]
 fn transport_state_pause_is_noop_when_not_started() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     ctx.transport().pause();
     assert_eq!(ctx.transport().state(), TransportState::Stopped);
     ctx.transport().start().pause();
@@ -170,7 +170,7 @@ fn transport_state_pause_is_noop_when_not_started() {
 
 #[test]
 fn transport_state_toggle_from_stopped_starts() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     ctx.transport().toggle();
     assert_eq!(ctx.transport().state(), TransportState::Started);
     ctx.transport().toggle();
@@ -179,7 +179,7 @@ fn transport_state_toggle_from_stopped_starts() {
 
 #[test]
 fn transport_state_stop_resets_playhead_from_paused() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     ctx.transport().start().pause();
     ctx.transport().stop();
     let t = ctx.transport();
@@ -190,7 +190,7 @@ fn transport_state_stop_resets_playhead_from_paused() {
 
 #[test]
 fn transport_state_buffer_sink_stays_readable_after_stop() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     ctx.sink_mut().write(&[0.25, -0.25]);
     ctx.transport().start();
     ctx.transport().stop();

@@ -15,7 +15,7 @@ fn approx_eq(got: f64, expected: f64) {
 /// fire_until(1.0); notes C4 E4; second time ≈ 0.5.
 #[test]
 fn part_loop_part_time_value_pairs() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let hits = Rc::new(RefCell::new(Vec::<(f64, String)>::new()));
     let collected = Rc::clone(&hits);
     let mut part = Part::new(
@@ -40,7 +40,7 @@ fn part_loop_part_time_value_pairs() {
 /// stop(); fire_until(2.0); hit count unchanged.
 #[test]
 fn part_loop_loop_repeats_until_stop() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let hits = Rc::new(RefCell::new(Vec::<f64>::new()));
     let collected = Rc::clone(&hits);
     let mut looper = Loop::new(
@@ -63,7 +63,7 @@ fn part_loop_loop_repeats_until_stop() {
 /// Part.stop cancels scheduled hits (same attach rule as Sequence).
 #[test]
 fn part_loop_part_stop_cancels_scheduled_hits() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let hits = Rc::new(RefCell::new(Vec::<String>::new()));
     let collected = Rc::clone(&hits);
     let mut part = Part::new(
@@ -83,7 +83,7 @@ fn part_loop_part_stop_cancels_scheduled_hits() {
 /// schedule).
 #[test]
 fn part_loop_stop_leaves_other_transport_events() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let part_hits = Rc::new(RefCell::new(Vec::<&'static str>::new()));
     let loop_hits = Rc::new(RefCell::new(Vec::<&'static str>::new()));
     let other_hits = Rc::new(RefCell::new(Vec::<&'static str>::new()));

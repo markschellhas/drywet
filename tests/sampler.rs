@@ -67,15 +67,15 @@ fn sampler_map_pitch_shift_directory_and_polyphony() {
     let c4 = dir.join("C4.wav");
     write_pcm16_wav(&c4, &[0.4; 64], 44100, 1);
 
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut sampler = Sampler::with_map(&ctx, [("C4", c4.as_path())], 1).unwrap();
     sampler
-        .trigger_attack_release(&mut ctx, "C4", 0.01, Some(0.0.into()))
+        .trigger_attack_release(&ctx, "C4", 0.01, Some(0.0.into()))
         .unwrap();
     assert!(peak(ctx.sink().frames()) > 0.01);
 
     sampler
-        .trigger_attack_release(&mut ctx, "C5", 0.01, Some(0.0.into()))
+        .trigger_attack_release(&ctx, "C5", 0.01, Some(0.0.into()))
         .unwrap();
     sampler.add("D4", &c4).unwrap();
 
@@ -88,10 +88,10 @@ fn sampler_map_pitch_shift_directory_and_polyphony() {
     assert_eq!(loaded.samples().len(), 1);
 
     sampler
-        .trigger_attack(&mut ctx, "C4", Some(0.0.into()))
+        .trigger_attack(&ctx, "C4", Some(0.0.into()))
         .unwrap();
     assert!(matches!(
-        sampler.trigger_attack(&mut ctx, "E4", Some(0.0.into())),
+        sampler.trigger_attack(&ctx, "E4", Some(0.0.into())),
         Err(InstrumentError::VoiceLimitExceeded)
     ));
 }
@@ -131,11 +131,11 @@ fn sampler_resamples_on_load_when_rate_differs() {
     let dir = unique_dir();
     let path = dir.join("C4.wav");
     write_pcm16_wav(&path, &[0.4; 32], 22050, 1);
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut sampler = Sampler::with_map(&ctx, [("C4", path.as_path())], 1).unwrap();
     assert_eq!(sampler.samples()[&60].len(), 64);
     sampler
-        .trigger_attack_release(&mut ctx, "C4", 0.01, Some(0.0.into()))
+        .trigger_attack_release(&ctx, "C4", 0.01, Some(0.0.into()))
         .unwrap();
     assert!(peak(ctx.sink().frames()) > 0.01);
 }
@@ -145,23 +145,23 @@ fn sampler_release_all_and_empty_map() {
     let dir = unique_dir();
     let path = dir.join("C4.wav");
     write_pcm16_wav(&path, &[0.4; 16], 44100, 1);
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut sampler = Sampler::with_map(&ctx, [("C4", path.as_path())], 1).unwrap();
     sampler
-        .trigger_attack(&mut ctx, "C4", Some(0.0.into()))
+        .trigger_attack(&ctx, "C4", Some(0.0.into()))
         .unwrap();
     assert_eq!(sampler.active_voices(), 1);
     sampler.trigger_release("C4", None).unwrap();
     assert_eq!(sampler.active_voices(), 0);
     sampler
-        .trigger_attack(&mut ctx, "C4", Some(0.0.into()))
+        .trigger_attack(&ctx, "C4", Some(0.0.into()))
         .unwrap();
     sampler.release_all(None);
     assert_eq!(sampler.active_voices(), 0);
 
     let mut empty = Sampler::new(&ctx);
     assert!(matches!(
-        empty.trigger_attack(&mut ctx, "C4", Some(0.0.into())),
+        empty.trigger_attack(&ctx, "C4", Some(0.0.into())),
         Err(InstrumentError::EmptySampler)
     ));
     assert!(!empty.loop_flag());

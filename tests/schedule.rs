@@ -49,7 +49,7 @@ impl Sink for ProbeSink {
 /// Heritage test 1: schedule / once / repeat, then fire_until(1.0).
 #[test]
 fn schedule_once_repeat_fires_until() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.set_bpm(120.0).unwrap();
 
@@ -80,7 +80,7 @@ fn schedule_once_repeat_fires_until() {
 /// Heritage test 2: cancel keeps events whose time is strictly before `after`.
 #[test]
 fn schedule_cancel_keeps_earlier_events() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.clear();
 
@@ -99,7 +99,7 @@ fn schedule_cancel_keeps_earlier_events() {
 /// Heritage test 3: clear drops pending events.
 #[test]
 fn schedule_clear_drops_pending() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     let hits = Rc::new(RefCell::new(Vec::<&'static str>::new()));
     let x = Rc::clone(&hits);
@@ -112,7 +112,7 @@ fn schedule_clear_drops_pending() {
 /// Heritage test 4: times above MAX_SCHEDULE_SECONDS are Err.
 #[test]
 fn schedule_rejects_too_long() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     assert_eq!(
         ctx.transport().schedule(|_| {}, MAX_SCHEDULE_SECONDS + 1.0),
         Err(TransportError::ScheduleTimeOutOfRange(
@@ -123,7 +123,7 @@ fn schedule_rejects_too_long() {
 
 #[test]
 fn schedule_rejects_negative_time() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     assert_eq!(
         ctx.transport().schedule(|_| {}, -0.1),
         Err(TransportError::ScheduleTimeOutOfRange(-0.1))
@@ -132,7 +132,7 @@ fn schedule_rejects_negative_time() {
 
 #[test]
 fn schedule_accepts_max_seconds() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let id = ctx
         .transport()
         .schedule(|_| {}, MAX_SCHEDULE_SECONDS)
@@ -142,7 +142,7 @@ fn schedule_accepts_max_seconds() {
 
 #[test]
 fn schedule_invalid_time_is_time_error() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     assert_eq!(
         ctx.transport().schedule(|_| {}, "not-a-time"),
         Err(TransportError::Time(TimeError::InvalidTime(
@@ -153,7 +153,7 @@ fn schedule_invalid_time_is_time_error() {
 
 #[test]
 fn schedule_repeat_zero_interval_is_err_on_fire() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.schedule_repeat(|_| {}, 0.0, 0).unwrap();
     assert_eq!(
@@ -164,7 +164,7 @@ fn schedule_repeat_zero_interval_is_err_on_fire() {
 
 #[test]
 fn schedule_dispose_clears_stops_and_closes() {
-    let mut ctx = Context::with(44100, 1, ProbeSink::default());
+    let ctx = Context::with(44100, 1, ProbeSink::default());
     {
         let mut t = ctx.transport();
         t.start();
@@ -183,7 +183,7 @@ fn schedule_dispose_clears_stops_and_closes() {
 
 #[test]
 fn schedule_ids_increment_and_once_matches_schedule() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     let a = t.schedule(|_| {}, 0.1).unwrap();
     let b = t.schedule_once(|_| {}, 0.2).unwrap();
@@ -193,7 +193,7 @@ fn schedule_ids_increment_and_once_matches_schedule() {
 
 #[test]
 fn schedule_does_not_refire_after_fire_until() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     let hits = Rc::new(RefCell::new(0usize));
     let count = Rc::clone(&hits);

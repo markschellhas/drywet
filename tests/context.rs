@@ -6,7 +6,7 @@ fn context_owns_sink_and_defaults() {
     let sink = BufferSink::new(22050, 1);
     let rate = sink.sample_rate();
     let channels = sink.channels();
-    let mut ctx = Context::with(rate, channels, sink);
+    let ctx = Context::with(rate, channels, sink);
 
     assert_eq!(ctx.sample_rate(), 22050);
     assert_eq!(ctx.channels(), 1);
@@ -17,7 +17,7 @@ fn context_owns_sink_and_defaults() {
 
 #[test]
 fn context_default_is_buffer_sink() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     assert_eq!(ctx.sample_rate(), 44100);
     assert_eq!(ctx.channels(), 1);
     assert_eq!(ctx.sink().sample_rate(), 44100);

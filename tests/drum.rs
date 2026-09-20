@@ -3,11 +3,11 @@ use drywet::{Context, Drum};
 
 #[test]
 fn drum_named_voices_and_unknown() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut drum = Drum::new(&ctx);
-    drum.trigger(&mut ctx, "kick", Some(0.0.into())).unwrap();
-    drum.trigger(&mut ctx, "snare", Some(0.05.into())).unwrap();
-    drum.trigger_attack_release(&mut ctx, "hat", 0.02, Some(0.1.into()))
+    drum.trigger(&ctx, "kick", Some(0.0.into())).unwrap();
+    drum.trigger(&ctx, "snare", Some(0.05.into())).unwrap();
+    drum.trigger_attack_release(&ctx, "hat", 0.02, Some(0.1.into()))
         .unwrap();
     let peak = ctx
         .sink()
@@ -16,7 +16,7 @@ fn drum_named_voices_and_unknown() {
         .fold(0.0_f32, |acc, &s| acc.max(s.abs()));
     assert!(peak > 0.01);
     assert!(matches!(
-        drum.trigger(&mut ctx, "cowbell", None),
+        drum.trigger(&ctx, "cowbell", None),
         Err(InstrumentError::UnknownDrum(name)) if name == "cowbell"
     ));
 }
@@ -30,11 +30,11 @@ fn drum_beat_grid_sixteenths() {
 
 #[test]
 fn drum_hat_aliases_and_noop_release() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut drum = Drum::new(&ctx);
-    drum.trigger_attack(&mut ctx, "hi-hat", Some(0.0.into()))
+    drum.trigger_attack(&ctx, "hi-hat", Some(0.0.into()))
         .unwrap();
-    drum.trigger(&mut ctx, "hihat", Some(0.02.into())).unwrap();
+    drum.trigger(&ctx, "hihat", Some(0.02.into())).unwrap();
     drum.trigger_release("hat", None);
     drum.release_all(None);
     let peak = ctx

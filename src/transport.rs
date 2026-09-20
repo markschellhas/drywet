@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -448,7 +449,7 @@ impl Transport {
         )
     }
 
-    fn start(&mut self) -> bool {
+    pub(crate) fn start(&mut self) -> bool {
         match self.state {
             TransportState::Started => false,
             TransportState::Paused => {
@@ -604,7 +605,7 @@ impl Transport {
 
     /// Clone one-shot events that fall in the loop range across each cycle
     /// through `until` (drywet-py `render` loop expansion).
-    fn expand_loop_one_shots(&mut self, until: f64) {
+    pub(crate) fn expand_loop_one_shots(&mut self, until: f64) {
         if !(self.looping && self.loop_end_s > self.loop_start_s) {
             return;
         }
@@ -635,6 +636,36 @@ impl Transport {
         }
     }
 
+    /// Unfired `(when, callback, key)` pairs at or before `until_s`, sorted.
+    pub(crate) fn collect_due(
+        &mut self,
+        until_s: f64,
+    ) -> Result<Vec<(f64, ScheduleCallback, FiredKey)>, TransportError> {
+        let mut pending: Vec<(f64, u64, ScheduleCallback, FiredKey)> = Vec::new();
+        for event in &self.events {
+            for when in Self::occurrences(event.time, event.interval, until_s)? {
+                let key = fired_key(event.id, when);
+                if self.fired.contains(&key) {
+                    continue;
+                }
+                pending.push((when, event.id, Rc::clone(&event.callback), key));
+            }
+        }
+        pending.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        Ok(pending
+            .into_iter()
+            .map(|(when, _id, callback, key)| (when, callback, key))
+            .collect())
+    }
+
+    pub(crate) fn set_seconds_raw(&mut self, seconds: f64) {
+        self.seconds = seconds;
+    }
+
+    pub(crate) fn mark_fired(&mut self, key: FiredKey) {
+        self.fired.insert(key);
+    }
+
     /// Fire unfired occurrences at or before `until`, in `(when, id)` order.
     ///
     /// Port of drywet-py `_fire_until`. Sets the playhead to each occurrence
@@ -642,25 +673,34 @@ impl Transport {
     /// and later Sequence / render can drive the clock without mixing PCM.
     pub fn fire_until(&mut self, until: impl IntoTime) -> Result<(), TransportError> {
         let until_s = self.to_seconds(until)?;
-        let mut pending: Vec<(f64, u64, usize, FiredKey)> = Vec::new();
-        for (idx, event) in self.events.iter().enumerate() {
-            for when in Self::occurrences(event.time, event.interval, until_s)? {
-                let key = fired_key(event.id, when);
-                if self.fired.contains(&key) {
-                    continue;
-                }
-                pending.push((when, event.id, idx, key));
-            }
-        }
-        pending.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        for (when, _id, idx, key) in pending {
+        let pending = self.collect_due(until_s)?;
+        for (when, callback, key) in pending {
             self.seconds = when;
-            (self.events[idx].callback)(when);
+            callback(when);
             self.fired.insert(key);
         }
         self.seconds = until_s;
         Ok(())
     }
+}
+
+/// Fire due events without holding a `RefCell` borrow across callbacks.
+///
+/// Used by [`crate::Context::render`] and [`TransportRef::fire_until`] so a
+/// callback can `to_seconds` / mix onto the sink.
+pub(crate) fn fire_until_releasing(
+    transport: &RefCell<Transport>,
+    until: impl IntoTime,
+) -> Result<(), TransportError> {
+    let until_s = transport.borrow().to_seconds(until)?;
+    let pending = transport.borrow_mut().collect_due(until_s)?;
+    for (when, callback, key) in pending {
+        transport.borrow_mut().set_seconds_raw(when);
+        callback(when);
+        transport.borrow_mut().mark_fired(key);
+    }
+    transport.borrow_mut().set_seconds_raw(until_s);
+    Ok(())
 }
 
 fn fired_key(id: u64, when: f64) -> FiredKey {
@@ -673,17 +713,17 @@ impl Default for Transport {
     }
 }
 
-/// Mutable view of [`Transport`] plus the context sink.
+/// View of [`Transport`] plus the context sink (`RefCell` handles).
 ///
-/// Needed so [`start`](Self::start) can mark the sink accepted and
-/// [`stop`](Self::stop) can call [`Sink::stop`] without a second borrow.
+/// Each method takes a short [`RefCell`] borrow so a schedule callback can
+/// mix or read the clock without a second exclusive [`crate::Context`] borrow.
 pub struct TransportRef<'a, S: Sink> {
-    transport: &'a mut Transport,
-    sink: &'a mut S,
+    transport: &'a RefCell<Transport>,
+    sink: &'a RefCell<S>,
 }
 
 impl<'a, S: Sink> TransportRef<'a, S> {
-    pub(crate) fn new(transport: &'a mut Transport, sink: &'a mut S) -> Self {
+    pub(crate) fn new(transport: &'a RefCell<Transport>, sink: &'a RefCell<S>) -> Self {
         Self { transport, sink }
     }
 
@@ -693,28 +733,28 @@ impl<'a, S: Sink> TransportRef<'a, S> {
     /// tempo. Stopped copies the written bpm onto the running clock, resets
     /// seconds to `0`, and marks the sink accepted.
     pub fn start(&mut self) -> &mut Self {
-        if self.transport.start() {
-            self.sink.mark_accepted();
+        if self.transport.borrow_mut().start() {
+            self.sink.borrow_mut().mark_accepted();
         }
         self
     }
 
     /// Pause if started; otherwise a no-op.
     pub fn pause(&mut self) -> &mut Self {
-        self.transport.pause();
+        self.transport.borrow_mut().pause();
         self
     }
 
     /// Stop the arrangement clock and the sink. Does not close the sink.
     pub fn stop(&mut self) -> &mut Self {
-        self.transport.stop();
-        self.sink.stop();
+        self.transport.borrow_mut().stop();
+        self.sink.borrow_mut().stop();
         self
     }
 
     /// Pause when started; otherwise start.
     pub fn toggle(&mut self) -> &mut Self {
-        if self.transport.state() == TransportState::Started {
+        if self.state() == TransportState::Started {
             self.pause()
         } else {
             self.start()
@@ -723,37 +763,37 @@ impl<'a, S: Sink> TransportRef<'a, S> {
 
     /// Current lifecycle state.
     pub fn state(&self) -> TransportState {
-        self.transport.state()
+        self.transport.borrow().state()
     }
 
     /// Sample rate copied from [`crate::Context`] onto the transport.
     pub fn sample_rate(&self) -> u32 {
-        self.transport.sample_rate()
+        self.transport.borrow().sample_rate()
     }
 
     /// Output latency from the sink.
     pub fn latency_ms(&self) -> u32 {
-        self.sink.latency_ms()
+        self.sink.borrow().latency_ms()
     }
 
     /// Last-set tempo (written `_bpm`).
     pub fn bpm(&self) -> f64 {
-        self.transport.bpm()
+        self.transport.borrow().bpm()
     }
 
     /// Running tempo while started; otherwise the last-set value.
     pub fn clock_bpm(&self) -> f64 {
-        self.transport.clock_bpm()
+        self.transport.borrow().clock_bpm()
     }
 
     /// Store `bpm`. Applies immediately unless started (then next start).
     pub fn set_bpm(&mut self, bpm: f64) -> Result<(), TransportError> {
-        self.transport.set_bpm(bpm)
+        self.transport.borrow_mut().set_bpm(bpm)
     }
 
     /// Current `(numerator, denominator)`.
     pub fn time_signature(&self) -> (u32, u32) {
-        self.transport.time_signature()
+        self.transport.borrow().time_signature()
     }
 
     /// Set `(n, d)`, or an int beat count (`4` → `(4, 4)`).
@@ -761,41 +801,41 @@ impl<'a, S: Sink> TransportRef<'a, S> {
         &mut self,
         value: impl Into<TimeSignature>,
     ) -> Result<(), TransportError> {
-        self.transport.set_time_signature(value)
+        self.transport.borrow_mut().set_time_signature(value)
     }
 
     /// Playhead in seconds. `0.0` at rest and after stop.
     pub fn seconds(&self) -> f64 {
-        self.transport.seconds()
+        self.transport.borrow().seconds()
     }
 
     /// Set the playhead in seconds. Tests use this until render advances frames.
     ///
     /// When looping and the loop range is valid, wraps into `[loop_start, loop_end)`.
     pub fn set_seconds(&mut self, seconds: f64) {
-        self.transport.set_seconds(seconds);
+        self.transport.borrow_mut().set_seconds(seconds);
     }
 
     /// Whether the playhead wraps between [`loop_start`](Self::loop_start) and
     /// [`loop_end`](Self::loop_end).
     pub fn r#loop(&self) -> bool {
-        self.transport.r#loop()
+        self.transport.borrow().r#loop()
     }
 
     /// Enable or disable looping. When enabled, wraps the current playhead
     /// into the loop range if that range is valid.
     pub fn set_loop(&mut self, enabled: bool) {
-        self.transport.set_loop(enabled);
+        self.transport.borrow_mut().set_loop(enabled);
     }
 
     /// Loop start in seconds.
     pub fn loop_start(&self) -> f64 {
-        self.transport.loop_start()
+        self.transport.borrow().loop_start()
     }
 
     /// Loop end in seconds.
     pub fn loop_end(&self) -> f64 {
-        self.transport.loop_end()
+        self.transport.borrow().loop_end()
     }
 
     /// Set loop start and end from musical times. `end` must be after `start`.
@@ -804,7 +844,7 @@ impl<'a, S: Sink> TransportRef<'a, S> {
         start: impl IntoTime,
         end: impl IntoTime,
     ) -> Result<(), TransportError> {
-        self.transport.set_loop_points(start, end)
+        self.transport.borrow_mut().set_loop_points(start, end)
     }
 
     /// Register a callback for `start`, `stop`, `pause`, or `loop`.
@@ -815,32 +855,32 @@ impl<'a, S: Sink> TransportRef<'a, S> {
         name: &str,
         callback: impl Fn(f64) + 'static,
     ) -> Result<(), TransportError> {
-        self.transport.on(name, callback)
+        self.transport.borrow_mut().on(name, callback)
     }
 
     /// Playhead in PPQ ticks: `to_ticks(seconds)` at [`DEFAULT_PPQ`].
     pub fn ticks(&self) -> i64 {
-        self.transport.ticks()
+        self.transport.borrow().ticks()
     }
 
     /// Bars:beats:sixteenths from the current playhead and clock tempo.
     pub fn position(&self) -> String {
-        self.transport.position()
+        self.transport.borrow().position()
     }
 
     /// Convert a note value, BBS string, or raw seconds using the current clock.
     pub fn to_seconds(&self, value: impl IntoTime) -> Result<f64, TimeError> {
-        self.transport.to_seconds(value)
+        self.transport.borrow().to_seconds(value)
     }
 
     /// Convert a time value to pulses at [`DEFAULT_PPQ`] using the current clock.
     pub fn to_ticks(&self, value: impl IntoTime) -> Result<i64, TimeError> {
-        self.transport.to_ticks(value)
+        self.transport.borrow().to_ticks(value)
     }
 
     /// Convert a note name or numeric Hz using the current clock arguments.
     pub fn to_frequency(&self, value: impl IntoTime) -> Result<f64, TimeError> {
-        self.transport.to_frequency(value)
+        self.transport.borrow().to_frequency(value)
     }
 
     /// Schedule `callback` once at `time`. Returns the event id.
@@ -851,7 +891,7 @@ impl<'a, S: Sink> TransportRef<'a, S> {
         callback: impl Fn(f64) + 'static,
         time: impl IntoTime,
     ) -> Result<u64, TransportError> {
-        self.transport.schedule(callback, time)
+        self.transport.borrow_mut().schedule(callback, time)
     }
 
     /// Alias of [`schedule`](Self::schedule).
@@ -860,7 +900,7 @@ impl<'a, S: Sink> TransportRef<'a, S> {
         callback: impl Fn(f64) + 'static,
         time: impl IntoTime,
     ) -> Result<u64, TransportError> {
-        self.transport.schedule_once(callback, time)
+        self.transport.borrow_mut().schedule_once(callback, time)
     }
 
     /// Schedule `callback` at `start_time`, then every `interval` seconds.
@@ -871,57 +911,37 @@ impl<'a, S: Sink> TransportRef<'a, S> {
         start_time: impl IntoTime,
     ) -> Result<u64, TransportError> {
         self.transport
+            .borrow_mut()
             .schedule_repeat(callback, interval, start_time)
     }
 
     /// Drop events whose start time is `>= after` (converted to seconds).
     pub fn cancel(&mut self, after: impl IntoTime) -> Result<(), TransportError> {
-        self.transport.cancel(after)
+        self.transport.borrow_mut().cancel(after)
     }
 
     /// Remove scheduled events whose ids are in `ids`.
     pub fn cancel_ids(&mut self, ids: &[u64]) {
-        self.transport.cancel_ids(ids);
+        self.transport.borrow_mut().cancel_ids(ids);
     }
 
     /// Remove every scheduled event and forget which occurrences have fired.
     pub fn clear(&mut self) {
-        self.transport.clear();
+        self.transport.borrow_mut().clear();
     }
 
     /// Clear the schedule, stop the clock and sink, and close the sink.
     pub fn dispose(&mut self) {
-        self.transport.clear();
+        self.transport.borrow_mut().clear();
         self.stop();
-        self.sink.close();
+        self.sink.borrow_mut().close();
     }
 
     /// Fire unfired occurrences at or before `until`, in `(when, id)` order.
     ///
-    /// Port of drywet-py `_fire_until`. Sets the playhead to each occurrence
-    /// time before calling the callback, then to `until`.
+    /// Drops the transport `RefCell` borrow before each callback so
+    /// instruments can mix and convert time.
     pub fn fire_until(&mut self, until: impl IntoTime) -> Result<(), TransportError> {
-        self.transport.fire_until(until)
-    }
-
-    /// Start if needed, fire scheduled events through `duration`, pad the
-    /// sink, and return a copy of the sink frames.
-    ///
-    /// Port of drywet-py `Transport.render`. After this call the playhead
-    /// equals the converted duration (`fire_until` already sets `seconds`).
-    pub fn render(&mut self, duration: impl IntoTime) -> Result<Vec<f32>, TransportError> {
-        if self.transport.state() != TransportState::Started {
-            self.start();
-        }
-        let until = self.transport.to_seconds(duration)?;
-        self.transport.expand_loop_one_shots(until);
-        self.transport.fire_until(until)?;
-        let needed = (until * f64::from(self.transport.sample_rate())).round() as usize;
-        let cursor = self.sink.write_cursor();
-        if cursor < needed {
-            let pad = vec![0.0; needed - cursor];
-            self.sink.write(&pad);
-        }
-        Ok(self.sink.frames().to_vec())
+        fire_until_releasing(self.transport, until)
     }
 }

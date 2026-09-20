@@ -10,7 +10,7 @@ fn approx_eq(got: f64, expected: f64) {
 
 #[test]
 fn transport_time_bpm_signature_and_conversions() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.set_bpm(120.0).unwrap();
     t.set_time_signature(4).unwrap();
@@ -25,7 +25,7 @@ fn transport_time_bpm_signature_and_conversions() {
 
 #[test]
 fn transport_time_bpm_limits_and_next_start_lock() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.set_bpm(100.0).unwrap();
     assert_eq!(t.set_bpm(39.0), Err(TransportError::InvalidBpm(39.0)));
@@ -39,7 +39,7 @@ fn transport_time_bpm_limits_and_next_start_lock() {
 
 #[test]
 fn transport_time_position_after_manual_seconds() {
-    let mut ctx = Context::new();
+    let ctx = Context::new();
     let mut t = ctx.transport();
     t.set_bpm(120.0).unwrap();
     t.set_time_signature((4, 4)).unwrap();

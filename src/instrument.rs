@@ -106,11 +106,11 @@ impl Synth {
 
     /// Render `duration` of `note` at `time`, then release the voice.
     ///
-    /// Duration and time convert via [`crate::transport::TransportRef::to_seconds`].
+    /// Duration and time convert via [`crate::Context::to_seconds`].
     /// `time = None` mixes at the write cursor.
     pub fn trigger_attack_release<S, N, D>(
         &mut self,
-        ctx: &mut Context<S>,
+        ctx: &Context<S>,
         note: N,
         duration: D,
         time: Option<TimeValue>,
@@ -129,7 +129,7 @@ impl Synth {
     /// Acquire a voice and mix a 1.0s additive note (heritage one-shot).
     pub fn trigger_attack<S, N>(
         &mut self,
-        ctx: &mut Context<S>,
+        ctx: &Context<S>,
         note: N,
         time: Option<TimeValue>,
     ) -> Result<&mut Self, InstrumentError>
@@ -180,7 +180,7 @@ impl Synth {
 
     fn mix_note<S, N, D>(
         &self,
-        ctx: &mut Context<S>,
+        ctx: &Context<S>,
         note: N,
         duration: Option<D>,
         time: Option<TimeValue>,
@@ -192,7 +192,7 @@ impl Synth {
     {
         let freq = midi_to_hz(note)?;
         let duration_s = match duration {
-            Some(value) => ctx.transport().to_seconds(value)?,
+            Some(value) => ctx.to_seconds(value)?,
             None => TRIGGER_ATTACK_SECONDS,
         };
         let frames = render_additive(freq, duration_s, self.sample_rate);
@@ -226,7 +226,7 @@ impl Drum {
     /// Mix a named drum hit at `time`.
     pub fn trigger<S: Sink>(
         &mut self,
-        ctx: &mut Context<S>,
+        ctx: &Context<S>,
         name: &str,
         time: Option<TimeValue>,
     ) -> Result<&mut Self, InstrumentError> {
@@ -238,7 +238,7 @@ impl Drum {
     /// Alias of [`Drum::trigger`].
     pub fn trigger_attack<S: Sink>(
         &mut self,
-        ctx: &mut Context<S>,
+        ctx: &Context<S>,
         name: &str,
         time: Option<TimeValue>,
     ) -> Result<&mut Self, InstrumentError> {
@@ -253,7 +253,7 @@ impl Drum {
     /// Alias of [`Drum::trigger`]. `duration` is ignored.
     pub fn trigger_attack_release<S, D>(
         &mut self,
-        ctx: &mut Context<S>,
+        ctx: &Context<S>,
         name: &str,
         _duration: D,
         time: Option<TimeValue>,
@@ -375,7 +375,7 @@ impl Sampler {
     /// Mix the full (pitch-filled) sample at `time` and keep the voice.
     pub fn trigger_attack<S, N>(
         &mut self,
-        ctx: &mut Context<S>,
+        ctx: &Context<S>,
         note: N,
         time: Option<TimeValue>,
     ) -> Result<&mut Self, InstrumentError>
@@ -396,7 +396,7 @@ impl Sampler {
     /// Mix up to `duration` of the (pitch-filled) sample, then release.
     pub fn trigger_attack_release<S, N, D>(
         &mut self,
-        ctx: &mut Context<S>,
+        ctx: &Context<S>,
         note: N,
         duration: D,
         time: Option<TimeValue>,
@@ -445,7 +445,7 @@ impl Sampler {
 
     fn mix_sample<S, N, D>(
         &self,
-        ctx: &mut Context<S>,
+        ctx: &Context<S>,
         note: N,
         duration: Option<D>,
         time: Option<TimeValue>,
@@ -458,7 +458,7 @@ impl Sampler {
         let midi = note.into_midi()?;
         let mut frames = self.nearest(midi)?;
         if let Some(value) = duration {
-            let duration_s = ctx.transport().to_seconds(value)?;
+            let duration_s = ctx.to_seconds(value)?;
             let n = (duration_s * f64::from(self.sample_rate)).round() as usize;
             if n < frames.len() {
                 frames.truncate(n);
@@ -487,14 +487,14 @@ impl Sampler {
 
 /// Mix `frames` at `time`, or at the write cursor when `time` is `None`.
 fn mix_at_time<S: Sink>(
-    ctx: &mut Context<S>,
+    ctx: &Context<S>,
     frames: &[f32],
     time: Option<TimeValue>,
 ) -> Result<(), InstrumentError> {
     let at_sample = match time {
         None => None,
         Some(value) => {
-            let seconds = ctx.transport().to_seconds(value)?;
+            let seconds = ctx.to_seconds(value)?;
             Some((seconds * f64::from(ctx.sample_rate())).round() as usize)
         }
     };
