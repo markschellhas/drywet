@@ -1,11 +1,25 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 
-use crate::limits::{BPM_MAX, BPM_MIN, DEFAULT_PPQ};
+use crate::limits::{BPM_MAX, BPM_MIN, DEFAULT_PPQ, MAX_SCHEDULE_SECONDS};
 use crate::sink::Sink;
 use crate::time::{to_frequency, to_seconds, to_ticks, IntoTime, TimeError};
 
 type EventCallback = Box<dyn Fn(f64) + 'static>;
+
+/// One-shot or repeating callback registered with [`Transport::schedule`].
+struct ScheduledEvent {
+    id: u64,
+    time: f64,
+    callback: EventCallback,
+    interval: Option<f64>,
+}
+
+/// `(event_id, round(when, 9) as nanos)` — same uniqueness as drywet-py `_fired`.
+type FiredKey = (u64, i64);
+
+const OCCURRENCE_EPS: f64 = 1e-12;
 
 #[derive(Clone, Copy)]
 enum TransportEvent {
@@ -53,6 +67,9 @@ pub struct Transport {
     on_stop: Vec<EventCallback>,
     on_pause: Vec<EventCallback>,
     on_loop: Vec<EventCallback>,
+    events: Vec<ScheduledEvent>,
+    next_event_id: u64,
+    fired: HashSet<FiredKey>,
 }
 
 /// Playhead lifecycle: stopped, started, or paused.
@@ -79,6 +96,10 @@ pub enum TransportError {
     UnknownEvent(String),
     /// Musical time conversion failed (for example in `set_loop_points`).
     Time(TimeError),
+    /// Schedule time was negative or greater than [`MAX_SCHEDULE_SECONDS`].
+    ScheduleTimeOutOfRange(f64),
+    /// `schedule_repeat` interval converted to a non-positive duration.
+    InvalidRepeatInterval,
 }
 
 impl fmt::Display for TransportError {
@@ -93,6 +114,12 @@ impl fmt::Display for TransportError {
             }
             TransportError::UnknownEvent(name) => write!(f, "unknown event: {name:?}"),
             TransportError::Time(err) => write!(f, "{err}"),
+            TransportError::ScheduleTimeOutOfRange(_) => {
+                write!(f, "schedule time out of range")
+            }
+            TransportError::InvalidRepeatInterval => {
+                write!(f, "repeat interval must be > 0")
+            }
         }
     }
 }
@@ -104,7 +131,9 @@ impl Error for TransportError {
             TransportError::InvalidBpm(_)
             | TransportError::InvalidTimeSignature
             | TransportError::InvalidLoopPoints
-            | TransportError::UnknownEvent(_) => None,
+            | TransportError::UnknownEvent(_)
+            | TransportError::ScheduleTimeOutOfRange(_)
+            | TransportError::InvalidRepeatInterval => None,
         }
     }
 }
@@ -216,6 +245,9 @@ impl Transport {
             on_stop: Vec::new(),
             on_pause: Vec::new(),
             on_loop: Vec::new(),
+            events: Vec::new(),
+            next_event_id: 1,
+            fired: HashSet::new(),
         }
     }
 
@@ -431,6 +463,147 @@ impl Transport {
         self.seconds = 0.0;
         self.emit(TransportEvent::Stop);
     }
+
+    fn event_time(&self, value: impl IntoTime) -> Result<f64, TransportError> {
+        let seconds = self.to_seconds(value)?;
+        if seconds < 0.0 || seconds > MAX_SCHEDULE_SECONDS {
+            return Err(TransportError::ScheduleTimeOutOfRange(seconds));
+        }
+        Ok(seconds)
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_event_id;
+        self.next_event_id += 1;
+        id
+    }
+
+    /// Schedule `callback` once at `time`. Returns the event id.
+    ///
+    /// `time` is converted with [`to_seconds`](Self::to_seconds). Times below 0
+    /// or above [`MAX_SCHEDULE_SECONDS`] are rejected. Callbacks receive the
+    /// event time in seconds and must not write PCM.
+    pub fn schedule(
+        &mut self,
+        callback: impl Fn(f64) + 'static,
+        time: impl IntoTime,
+    ) -> Result<u64, TransportError> {
+        let time = self.event_time(time)?;
+        let id = self.next_id();
+        self.events.push(ScheduledEvent {
+            id,
+            time,
+            callback: Box::new(callback),
+            interval: None,
+        });
+        Ok(id)
+    }
+
+    /// Alias of [`schedule`](Self::schedule).
+    pub fn schedule_once(
+        &mut self,
+        callback: impl Fn(f64) + 'static,
+        time: impl IntoTime,
+    ) -> Result<u64, TransportError> {
+        self.schedule(callback, time)
+    }
+
+    /// Schedule `callback` at `start_time`, then every `interval` seconds.
+    ///
+    /// `interval` is converted with [`to_seconds`](Self::to_seconds). A
+    /// non-positive interval is rejected when occurrences are generated
+    /// ([`fire_until`](Self::fire_until)). `start_time` uses the same range
+    /// check as [`schedule`](Self::schedule).
+    pub fn schedule_repeat(
+        &mut self,
+        callback: impl Fn(f64) + 'static,
+        interval: impl IntoTime,
+        start_time: impl IntoTime,
+    ) -> Result<u64, TransportError> {
+        let start = self.event_time(start_time)?;
+        let interval = self.to_seconds(interval)?;
+        let id = self.next_id();
+        self.events.push(ScheduledEvent {
+            id,
+            time: start,
+            callback: Box::new(callback),
+            interval: Some(interval),
+        });
+        Ok(id)
+    }
+
+    /// Drop events whose start time is `>= after` (converted to seconds).
+    pub fn cancel(&mut self, after: impl IntoTime) -> Result<(), TransportError> {
+        let after_s = self.to_seconds(after)?;
+        self.events.retain(|event| event.time < after_s);
+        Ok(())
+    }
+
+    /// Remove every scheduled event and forget which occurrences have fired.
+    pub fn clear(&mut self) {
+        self.events.clear();
+        self.fired.clear();
+    }
+
+    /// Occurrences of `event` at or before `until` (drywet-py `_occurrences`).
+    fn occurrences(
+        start: f64,
+        interval: Option<f64>,
+        until: f64,
+    ) -> Result<Vec<f64>, TransportError> {
+        match interval {
+            None => {
+                if start <= until + OCCURRENCE_EPS {
+                    Ok(vec![start])
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            Some(interval) => {
+                if interval <= 0.0 {
+                    return Err(TransportError::InvalidRepeatInterval);
+                }
+                let mut times = Vec::new();
+                let mut cursor = start;
+                while cursor <= until + OCCURRENCE_EPS {
+                    times.push(cursor);
+                    cursor += interval;
+                }
+                Ok(times)
+            }
+        }
+    }
+
+    /// Fire unfired occurrences at or before `until`, in `(when, id)` order.
+    ///
+    /// Port of drywet-py `_fire_until`. Sets the playhead to each occurrence
+    /// time before calling the callback, then to `until`. Exposed so tests
+    /// and later Sequence / render can drive the clock without mixing PCM.
+    pub fn fire_until(&mut self, until: impl IntoTime) -> Result<(), TransportError> {
+        let until_s = self.to_seconds(until)?;
+        let mut pending: Vec<(f64, u64, usize, FiredKey)> = Vec::new();
+        for (idx, event) in self.events.iter().enumerate() {
+            for when in Self::occurrences(event.time, event.interval, until_s)? {
+                let key = fired_key(event.id, when);
+                if self.fired.contains(&key) {
+                    continue;
+                }
+                pending.push((when, event.id, idx, key));
+            }
+        }
+        pending.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        for (when, _id, idx, key) in pending {
+            self.seconds = when;
+            (self.events[idx].callback)(when);
+            self.fired.insert(key);
+        }
+        self.seconds = until_s;
+        Ok(())
+    }
+}
+
+fn fired_key(id: u64, when: f64) -> FiredKey {
+    (id, (when * 1e9).round() as i64)
 }
 
 impl Default for Transport {
@@ -602,5 +775,61 @@ impl<'a, S: Sink> TransportRef<'a, S> {
     /// Convert a note name or numeric Hz using the current clock arguments.
     pub fn to_frequency(&self, value: impl IntoTime) -> Result<f64, TimeError> {
         self.transport.to_frequency(value)
+    }
+
+    /// Schedule `callback` once at `time`. Returns the event id.
+    ///
+    /// Callbacks receive the event time in seconds and must not write PCM.
+    pub fn schedule(
+        &mut self,
+        callback: impl Fn(f64) + 'static,
+        time: impl IntoTime,
+    ) -> Result<u64, TransportError> {
+        self.transport.schedule(callback, time)
+    }
+
+    /// Alias of [`schedule`](Self::schedule).
+    pub fn schedule_once(
+        &mut self,
+        callback: impl Fn(f64) + 'static,
+        time: impl IntoTime,
+    ) -> Result<u64, TransportError> {
+        self.transport.schedule_once(callback, time)
+    }
+
+    /// Schedule `callback` at `start_time`, then every `interval` seconds.
+    pub fn schedule_repeat(
+        &mut self,
+        callback: impl Fn(f64) + 'static,
+        interval: impl IntoTime,
+        start_time: impl IntoTime,
+    ) -> Result<u64, TransportError> {
+        self.transport
+            .schedule_repeat(callback, interval, start_time)
+    }
+
+    /// Drop events whose start time is `>= after` (converted to seconds).
+    pub fn cancel(&mut self, after: impl IntoTime) -> Result<(), TransportError> {
+        self.transport.cancel(after)
+    }
+
+    /// Remove every scheduled event and forget which occurrences have fired.
+    pub fn clear(&mut self) {
+        self.transport.clear();
+    }
+
+    /// Clear the schedule, stop the clock and sink, and close the sink.
+    pub fn dispose(&mut self) {
+        self.transport.clear();
+        self.stop();
+        self.sink.close();
+    }
+
+    /// Fire unfired occurrences at or before `until`, in `(when, id)` order.
+    ///
+    /// Port of drywet-py `_fire_until`. Sets the playhead to each occurrence
+    /// time before calling the callback, then to `until`.
+    pub fn fire_until(&mut self, until: impl IntoTime) -> Result<(), TransportError> {
+        self.transport.fire_until(until)
     }
 }
