@@ -28,6 +28,12 @@ pub trait Sink {
 
     /// Whether any mix or write has been accepted.
     fn accepted(&self) -> bool;
+
+    /// Mark the destination as accepted. Default is a no-op.
+    ///
+    /// [`crate::transport::TransportRef::start`] uses this so BufferSink
+    /// reports accepted immediately when the clock starts.
+    fn mark_accepted(&mut self) {}
 }
 
 /// In-memory expanding f32 buffer for tests and offline render.
@@ -101,9 +107,14 @@ impl BufferSink {
         self.write_cursor
     }
 
-    /// `true` after the first [`mix`](Self::mix) or [`write`](Self::write).
+    /// `true` after the first mix, write, or [`mark_accepted`](Self::mark_accepted).
     pub fn accepted(&self) -> bool {
         self.accepted
+    }
+
+    /// Set [`accepted`](Self::accepted) without mixing audio.
+    pub fn mark_accepted(&mut self) {
+        self.accepted = true;
     }
 
     /// Clip to `[-1, 1]`, then pack `round(clipped * 32767)` as little-endian i16.
@@ -166,5 +177,9 @@ impl Sink for BufferSink {
 
     fn accepted(&self) -> bool {
         BufferSink::accepted(self)
+    }
+
+    fn mark_accepted(&mut self) {
+        BufferSink::mark_accepted(self);
     }
 }

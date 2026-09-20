@@ -1,6 +1,6 @@
 use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 use crate::sink::{BufferSink, Sink};
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportRef};
 
 /// Runtime that owns sample rate, channel count, one [`Sink`], and one [`Transport`].
 ///
@@ -51,9 +51,17 @@ impl<S: Sink> Context<S> {
         &self.sink
     }
 
-    /// The single arrangement clock. Always present; starts stopped.
-    pub fn transport(&self) -> &Transport {
-        &self.transport
+    /// Mutable access to the owned PCM destination.
+    pub fn sink_mut(&mut self) -> &mut S {
+        &mut self.sink
+    }
+
+    /// Handle to the arrangement clock.
+    ///
+    /// Mutably borrows the sink so [`TransportRef::start`] can mark it
+    /// accepted and [`TransportRef::stop`] can stop it without closing.
+    pub fn transport(&mut self) -> TransportRef<'_, S> {
+        TransportRef::new(&mut self.transport, &mut self.sink)
     }
 }
 
