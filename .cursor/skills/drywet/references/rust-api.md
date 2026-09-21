@@ -39,7 +39,7 @@ let ctx = Context::with(
 ctx.sink_mut().start_clock();
 ```
 
-`PipeWireSink::new` in unit tests uses an in-process `MockStream` (no libpipewire). Call `start_clock()` before expecting the stream to accept audio.
+`PipeWireSink::new(sr, ch)` always injects `MockStream` (no libpipewire, no speakers). `drywet-engine` without `--buffer` still uses that constructor today. A hardware backend is `PipeWireSink::with_backend(sr, ch, backend)` where `backend: StreamBackend`. Call `start_clock()` to open the injected stream. The process callback is `sink.process(&mut output)` — it must not allocate. `frames()` is empty on this sink; use `BufferSink` to inspect PCM.
 
 ## Transport / TransportRef
 

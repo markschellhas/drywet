@@ -32,7 +32,7 @@ If you are **changing the public API** toward those docs, say so and update test
 
 1. **Can the app link Rust?** Use `Context` in-process. `Context` / `Synth` are `!Send` (`RefCell`). Keep them on one thread. Share with `Rc<RefCell<_>>` from `'static` UI callbacks.
 2. **QML / other language?** Spawn one `drywet-engine` process. One JSON object per stdin line. Do not pretty-print across lines. See [references/engine-protocol.md](references/engine-protocol.md).
-3. **Tests / CI / offline render?** Default `Context::new()` is `BufferSink`. Never open PipeWire in `cargo test`.
+3. **Tests / CI / offline render?** Default `Context::new()` is `BufferSink`. Never depend on a sound server in `cargo test`.
 
 ```toml
 [dependencies]
@@ -47,15 +47,15 @@ drywet = { git = "https://github.com/markschellhas/drywet" }
 ```rust
 use drywet::{Context, Synth};
 
-let ctx = Context::new(); // BufferSink. Swap via Context::with(..., PipeWireSink::new(sr, ch))
+let ctx = Context::new(); // BufferSink — this is what tests and offline render use
 let mut synth = Synth::new(&ctx);
-ctx.sink_mut().start_clock(); // no-op on BufferSink; opens PipeWire
+ctx.sink_mut().start_clock(); // no-op on BufferSink
 ctx.transport().set_bpm(120)?;
 ctx.transport().start();
 synth.trigger_attack_release(&ctx, "C4", "8n", None)?; // now
 ```
 
-`PipeWireSink::new` takes `(sample_rate, channels)` — not `PipeWireSink::new()?`. Defaults: 44100 Hz, 1 channel.
+`PipeWireSink::new(sample_rate, channels)` is the callback-sink type, but today’s constructor injects an in-process `MockStream` (no libpipewire, no speakers). A real device needs `PipeWireSink::with_backend(sr, ch, backend)`. Do not write `PipeWireSink::new()?` or `ContextConfig { sink: Some(...) }` — those are docs-only. Defaults: 44100 Hz, 1 channel.
 
 ### Sequence that actually sounds
 

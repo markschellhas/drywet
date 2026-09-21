@@ -3,8 +3,8 @@
 Binary: `src/bin/drywet-engine.rs`. Handler: `src/engine.rs`. Tests: `tests/engine.rs`.
 
 ```text
-cargo run --bin drywet-engine              # PipeWireSink
-cargo run --bin drywet-engine -- --buffer  # BufferSink
+cargo run --bin drywet-engine              # PipeWireSink<MockStream> (callback sink, no device)
+cargo run --bin drywet-engine -- --buffer  # BufferSink (inspectable PCM; what tests use)
 ```
 
 Context is always 44100 Hz, 1 channel. One persistent process. `stop` keeps the process and sink. `shutdown` disposes and exits.
