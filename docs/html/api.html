@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>API cheat sheet — drywet</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button class="menu-btn" type="button" aria-expanded="false">Menu</button>
+  <div class="shell">
+    <nav class="side" aria-label="Documentation">
+      <a class="brand" href="index.html">
+      <img class="logo" src="drywet.jpg" alt="" width="36" height="36" />
+      <span class="mark"><span class="dry">dry</span><span class="wet">wet</span></span>
+      <span class="ver">v1</span></a>
+      <p class="tagline">Rust library for scheduling and playing musical events on desktop.</p>
+      <div class="nav-label">Start</div>
+      <a class="item" href="index.html">Overview</a>
+      <a class="item" href="getting-started.html">Getting started</a>
+      <div class="nav-label">Runtime</div>
+      <a class="item" href="context-transport.html">Context &amp; Transport</a>
+      <a class="item" href="time.html">Musical time</a>
+      <a class="item" href="instruments.html">Instruments</a>
+      <a class="item" href="scheduling.html">Sequence, Part, Loop</a>
+      <a class="item" href="output.html">Output sinks</a>
+      <div class="nav-label">Hosts</div>
+      <a class="item" href="engine.html">Stdio engine</a>
+      <a class="item" href="examples.html">Examples</a>
+      <a class="item current" href="api.html">API cheat sheet</a>
+    </nav>
+    <main id="content">
+      <p class="kicker">Reference</p>
+      <h1>API cheat sheet</h1>
+<nav class="toc"><strong>On this page</strong><ol><li><a href="#modules">Modules</a></li><li><a href="#context">Context</a></li><li><a href="#transport">Transport</a></li><li><a href="#instruments">Instruments</a></li><li><a href="#events">Events</a></li><li><a href="#sinks">Sinks</a></li><li><a href="#engine-commands">Engine commands</a></li><li><a href="#limits">Limits</a></li><li><a href="#not-in-v1">Not in v1</a></li></ol></nav>
+<p class="lede">Public modules, constructors, and the Tone.js mapping. Rust names are snake_case. Type names stay Transport, Sampler, Sequence, Part, Loop.</p><h2 id="modules">Modules</h2>
+<table><thead><tr><th>Module</th><th>Exports</th></tr></thead><tbody><tr><td><code>drywet</code></td><td><code>Context</code>, <code>ContextConfig</code>, <code>Transport</code>, time helpers, <code>VERSION</code></td></tr><tr><td><code>drywet::instrument</code></td><td><code>Sampler</code>, <code>Synth</code>, <code>Drum</code></td></tr><tr><td><code>drywet::event</code></td><td><code>Sequence</code>, <code>Part</code>, <code>Loop</code></td></tr><tr><td><code>drywet::sink</code></td><td><code>Sink</code>, <code>PipeWireSink</code>, <code>BufferSink</code></td></tr><tr><td><code>drywet-engine</code></td><td>stdio host binary</td></tr></tbody></table>
+<h2 id="context">Context</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>Context::new(ContextConfig { sample_rate: <span class="tok-num">44100</span>, channels: <span class="tok-num">1</span>, sink: <span class="tok-kw">None</span> })
+ctx.transport()
+ctx.sample_rate()
+ctx.channels()
+ctx.to_seconds(time)
+ctx.to_ticks(time)
+ctx.to_frequency(note)</pre></div>
+<p><code>sink: None</code> constructs a <code>BufferSink</code>. Pass <code>Some(Box::new(PipeWireSink::new()?))</code> for live Linux output.</p>
+<h2 id="transport">Transport</h2>
+<table><thead><tr><th>drywet v1</th><th>Tone.js 14.7</th></tr></thead><tbody><tr><td><code>start</code> / <code>stop</code> / <code>pause</code> / <code>toggle</code></td><td>same</td></tr><tr><td><code>set_bpm</code></td><td><code>Transport.bpm</code> (no <code>rampTo</code>; applied on next <code>start</code> if already running)</td></tr><tr><td><code>set_loop</code>, <code>set_loop_start</code>, <code>set_loop_end</code>, <code>set_loop_points</code></td><td><code>loop</code>, <code>loopStart</code>, <code>loopEnd</code>, <code>setLoopPoints</code></td></tr><tr><td><code>position</code>, <code>seconds</code>, <code>ticks</code>, <code>PPQ</code>, <code>state</code></td><td>same roles</td></tr><tr><td><code>time_signature</code> as <code>(n, d)</code></td><td><code>timeSignature</code> (Tone reduces to numerator/4)</td></tr><tr><td><code>schedule</code> / <code>schedule_once</code> / <code>schedule_repeat</code></td><td><code>schedule</code> / <code>scheduleOnce</code> / <code>scheduleRepeat</code></td></tr><tr><td><code>cancel</code> / <code>clear</code> / <code>dispose</code></td><td>same</td></tr><tr><td><code>render(duration)</code></td><td>Offline role</td></tr><tr><td><code>latency_ms</code></td><td>desktop playhead offset (not in Tone)</td></tr></tbody></table>
+<p>Events: <code>start</code>, <code>stop</code>, <code>pause</code>, <code>loop</code>.</p>
+<h2 id="instruments">Instruments</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>Synth::new(&amp;ctx)
+Drum::new(&amp;ctx)
+Sampler::new(urls, &amp;ctx)
+Sampler::from_directory(path, &amp;ctx)
+sampler.add(note, path)
+sampler.release_all(time)
+
+<span class="tok-cm">// shared</span>
+inst.trigger_attack(note, time)
+inst.trigger_release(note, time)
+inst.trigger_attack_release(note, duration, time)</pre></div>
+<p><code>time</code> is <code>None</code> for now, or <code>Some(...)</code> for a scheduled time. Drum voices: <code>&quot;kick&quot;</code>, <code>&quot;snare&quot;</code>, <code>&quot;hat&quot;</code>.</p>
+<h2 id="events">Events</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>Sequence::new(callback, events, subdivision)
+Part::new(callback, events)    <span class="tok-cm">// [(time, value), ...]</span>
+Loop::new(callback, interval)
+obj.start(offset)
+obj.stop()
+obj.dispose()</pre></div>
+<p><code>Event::{Note, Rest, Group}</code> covers rests and nested subdivision.</p>
+<h2 id="sinks">Sinks</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>PipeWireSink::new()
+BufferSink::new()
+<span class="tok-cm">// trait: write, mix, stop, close, latency_ms, write_cursor, accepted</span></pre></div>
+<h2 id="engine-commands">Engine commands</h2>
+<p><code>warmup</code>, <code>start</code>, <code>stop</code>, <code>pause</code>, <code>resume</code>, <code>play-midi</code>, <code>note-on</code>, <code>note-off</code>, <code>bpm</code>, <code>shutdown</code>.</p>
+<p>Events out: <code>started</code> (<code>latencyMs</code>, <code>frames</code> or position), <code>ok</code>, <code>error</code>.</p>
+<p>Default sink PipeWire; <code>--buffer</code> uses BufferSink.</p>
+<h2 id="limits">Limits</h2>
+<table><thead><tr><th>Thing</th><th>v1 cap</th></tr></thead><tbody><tr><td>BPM</td><td>40–240</td></tr><tr><td>MIDI</td><td>0–127</td></tr><tr><td>Hz</td><td>20–20000</td></tr><tr><td>Samples</td><td>WAV only; resample on load</td></tr><tr><td>PPQ</td><td>192 default</td></tr><tr><td>Default I/O</td><td>s16le, 44100, mono</td></tr><tr><td>Schedule length</td><td>600 seconds</td></tr><tr><td>Dependencies</td><td>Rust crate + host PipeWire for live output</td></tr></tbody></table>
+<p>Exceeding a cap returns <code>Err</code>.</p>
+<h2 id="not-in-v1">Not in v1</h2>
+<ul><li>Web Audio: <code>AudioContext</code>, nodes, <code>toDestination()</code>, Signals, <code>Tone.Draw</code></li><li><code>Instrument.sync</code> / <code>unsync</code></li><li>Effects, velocity layers, swing, humanize, probability, per-note automation</li><li>Mixer UI, recording, clip warping, Ableton Link</li><li>Required cargo / compiler for vendored widgets</li><li>VST3 / JUCE / CLAP</li><li>A Python runtime (see <a href="https://github.com/markschellhas/drywet-py">drywet-py</a> for the prototype)</li></ul>
+      <footer class="page">
+        <a href="examples.html">← Examples</a><a href="index.html">Overview</a>
+      </footer>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

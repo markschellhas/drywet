@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>drywet — musician runtime for Rust audio apps</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button class="menu-btn" type="button" aria-expanded="false">Menu</button>
+  <div class="shell">
+    <nav class="side" aria-label="Documentation">
+      <a class="brand" href="index.html">
+      <img class="logo" src="drywet.jpg" alt="" width="36" height="36" />
+      <span class="mark"><span class="dry">dry</span><span class="wet">wet</span></span>
+      <span class="ver">v1</span></a>
+      <p class="tagline">Rust library for scheduling and playing musical events on desktop.</p>
+      <div class="nav-label">Start</div>
+      <a class="item current" href="index.html">Overview</a>
+      <a class="item" href="getting-started.html">Getting started</a>
+      <div class="nav-label">Runtime</div>
+      <a class="item" href="context-transport.html">Context &amp; Transport</a>
+      <a class="item" href="time.html">Musical time</a>
+      <a class="item" href="instruments.html">Instruments</a>
+      <a class="item" href="scheduling.html">Sequence, Part, Loop</a>
+      <a class="item" href="output.html">Output sinks</a>
+      <div class="nav-label">Hosts</div>
+      <a class="item" href="engine.html">Stdio engine</a>
+      <a class="item" href="examples.html">Examples</a>
+      <a class="item" href="api.html">API cheat sheet</a>
+    </nav>
+    <main id="content">
+      <div class="overview-hero">
+        <img class="overview-art" src="drywet.jpg" alt="DryWet mix knob" width="96" height="96" />
+        <div>
+          <p class="kicker">Overview</p>
+          <h1>A musician runtime for Rust audio apps</h1>
+          <p class="lede">drywet is a Rust library and a small stdio binary that give desktop music widgets a musician-facing runtime: one Transport, musical time, Sampler, simple synths and drums, Sequence / Part / Loop, and live notes mixed onto one playing stream.</p>
+        </div>
+      </div>
+      <div class="pills">
+        <span class="pill">Rust crate</span>
+        <span class="pill">PipeWire callback</span>
+        <span class="pill">no Qt / QML</span>
+        <span class="pill">vendored engine</span>
+        <span class="pill">NDJSON host adapter</span>
+      </div>
+
+<p>Tone.js feels complete because it is two layers: a musician API (Transport, <code>&quot;4n&quot;</code> time, Sampler, Sequence) and a hard audio engine (the browser). drywet takes the first layer and implements the second in Rust on PipeWire.</p>
+<div class="code hero-example"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, Sequence, Synth};
+
+<span class="tok-kw">let</span> ctx = Context::new(ContextConfig::default());
+<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
+<span class="tok-kw">let</span> seq = Sequence::new(
+    |time, note| synth.trigger_attack_release(note, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">Some</span>(time)),
+    [<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;G3&quot;</span>, <span class="tok-str">&quot;A3&quot;</span>, <span class="tok-str">&quot;F3&quot;</span>],
+    <span class="tok-str">&quot;1m&quot;</span>,
+);
+seq.start(<span class="tok-num">0</span>)?;
+ctx.transport().set_bpm(<span class="tok-num">120</span>)?;
+ctx.transport().start()?;</pre></div>
+<p>Instruments use <code>trigger_attack_release</code>. Sequences attach to the Transport. The callback’s <code>time</code> argument is the sample clock, rather than <code>thread::sleep</code> or a UI timer.</p>
+<p>A Python prototype of the same API lives in <a href="https://github.com/markschellhas/drywet-py">drywet-py</a>. That package is reference only. This repo does not depend on it.</p>
+<h2 id="who-it-is-for">Who it is for</h2><div class="grid-2"><article class="card"><h3>In-process Rust</h3><p>CLI tools, desktop helpers, and later standalone apps import <code>drywet</code> and call Context, Transport, and instruments directly.</p></article><article class="card"><h3>Out-of-process UIs</h3><p>QML overlays (Omarchy bar or menu plugins) spawn <code>drywet-engine</code> and speak NDJSON. The library does not depend on Qt.</p></article><article class="card"><h3>Vendored widgets</h3><p>Plugin hosts vendor a prebuilt Linux binary. End users do not run <code>cargo</code> or <code>pip</code>.</p></article><article class="card"><h3>Tests and CI</h3><p><code>BufferSink</code> and <code>transport.render()</code> keep tests off a sound server.</p></article></div>
+<h2 id="architecture">Architecture</h2>
+<p>drywet follows Tone.js’s musician layer: a playhead, <code>&quot;4n&quot;</code> time, Sampler, and Sequence. Linux output is a persistent PipeWire callback (not one <code>pw-play</code> per hit).</p>
+<table><thead><tr><th>Layer</th><th>Role</th></tr></thead><tbody><tr><td>UI process</td><td>QML, CLI, or other host</td></tr><tr><td>NDJSON</td><td>optional; in-process apps skip this</td></tr><tr><td>Rust runtime</td><td><code>drywet</code> Context + Transport</td></tr><tr><td>raw PCM</td><td>s16le, 44100, default mono</td></tr><tr><td>PipeWireSink</td><td>one persistent stream</td></tr><tr><td>BufferSink</td><td>offline / CI path</td></tr></tbody></table>
+<h2 id="feature-map">Feature map</h2>
+<table><thead><tr><th>You want to…</th><th>Use</th><th>Docs</th></tr></thead><tbody><tr><td>Own sample rate, channels, sink, and one clock</td><td><code>Context</code></td><td><a href="context-transport.html">Context &amp; Transport</a></td></tr><tr><td>Start, stop, loop, set BPM, read the playhead</td><td><code>ctx.transport()</code></td><td><a href="context-transport.html">Context &amp; Transport</a></td></tr><tr><td>Write <code>&quot;8n&quot;</code>, <code>&quot;1m&quot;</code>, <code>&quot;0:2:0&quot;</code></td><td><code>to_seconds</code> / <code>to_ticks</code></td><td><a href="time.html">Musical time</a></td></tr><tr><td>Map WAV files to notes and pitch-fill the rest</td><td><code>Sampler</code></td><td><a href="instruments.html">Instruments</a></td></tr><tr><td>Play a chord widget with no sample bank</td><td><code>Synth</code></td><td><a href="instruments.html">Instruments</a></td></tr><tr><td>Kick / snare / hi-hat grids</td><td><code>Drum</code></td><td><a href="instruments.html">Instruments</a></td></tr><tr><td>Repeat events on the Transport</td><td><code>Sequence</code>, <code>Part</code>, <code>Loop</code></td><td><a href="scheduling.html">Scheduling</a></td></tr><tr><td>Hear audio on Linux, or capture PCM in tests</td><td><code>PipeWireSink</code>, <code>BufferSink</code></td><td><a href="output.html">Output sinks</a></td></tr><tr><td>Drive drywet from a non-Rust UI</td><td><code>drywet-engine</code></td><td><a href="engine.html">Stdio engine</a></td></tr></tbody></table>
+<h2 id="constraints">Constraints</h2>
+<ul><li><strong>Sample clock.</strong> Arrangement is rendered onto integer sample frames. Language timers are not used as the clock.</li><li><strong>Single sink.</strong> Live notes mix onto the write cursor of the playing stream. A process per note is not supported.</li><li><strong>PipeWire is output.</strong> A callback stream plays PCM. The Transport is the playhead.</li><li><strong>Playhead alignment.</strong> After <code>start()</code>, use <code>started</code> plus <code>latency_ms</code> (the negotiated stream latency) for a UI needle. <code>QTimer</code> guesses will drift.</li><li><strong>Stop keeps the process.</strong> Sample cache lives across bars. <code>shutdown</code> tears the engine down.</li></ul>
+<div class="callout note"><strong>Scope.</strong><p>drywet does not include <code>AudioContext</code>, Gain nodes, effects, swing, velocity layers, or a mixer UI. Rust names are snake_case. Type names stay Transport, Sampler, Sequence, Part, Loop.</p></div>
+<h2 id="install-paths">Install paths</h2><div class="grid-2"><article class="card"><h3>Vendored widget (v1 primary)</h3><p>The plugin repo vendors a prebuilt <code>drywet-engine</code> Linux binary. The end user does not install Rust.</p></article><article class="card"><h3>In-process crate</h3><p>Apps that already use Cargo depend on <code>drywet</code> and call the library directly.</p></article></div>
+<p>See <a href="getting-started.html">Getting started</a> for a first sound, or <a href="examples.html">Examples</a> for longer sketches.</p>
+      <footer class="page">
+        <span>drywet v1 draft API, from the product spec</span><a href="getting-started.html">Getting started →</a>
+      </footer>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
