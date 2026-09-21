@@ -31,102 +31,35 @@
       <div class="nav-label">Hosts</div>
       <a class="item" href="engine.html">Stdio engine</a>
       <a class="item" href="examples.html">Examples</a>
-      <a class="item" href="api.html">API cheat sheet</a>
+      <a class="item" href="api.html">API reference</a>
     </nav>
     <main id="content">
-      <p class="kicker">Context and clock</p>
-      <h1>Context &amp; Transport</h1>
-<nav class="toc"><strong>On this page</strong><ol><li><a href="#create-a-context">Create a Context</a></li><li><a href="#start-stop-pause-toggle">Start, stop, pause, toggle</a></li><li><a href="#bpm-and-time-signature">BPM and time signature</a></li><li><a href="#looping">Looping</a></li><li><a href="#playhead-and-latency">Playhead and latency</a></li><li><a href="#low-level-schedule">Low-level schedule</a></li><li><a href="#transport-events">Transport events</a></li><li><a href="#limits">Limits</a></li></ol></nav>
-<p class="lede"><code>Context</code> owns sample rate, channel count, the sink, and one Transport. The Transport is the arrangement clock: start / stop / pause, loop points, BPM, and a queryable playhead.</p><h2 id="create-a-context">Create a Context</h2>
-<p>Defaults are 44100 Hz, mono, and <code>BufferSink</code> so tests never open a sound server. Stereo is opt-in. Live Linux output takes a <code>PipeWireSink</code>.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{BufferSink, Context, ContextConfig, PipeWireSink};
+      <p class="kicker">Runtime state</p>
+      <h1>Context and transport</h1>
+<nav class="toc"><strong>On this page</strong><ol><li><a href="#context-construction">Context construction</a></li><li><a href="#transport-controls">Transport controls</a></li><li><a href="#rendering-and-playback">Rendering and playback</a></li><li><a href="#threading">Threading</a></li></ol></nav>
+<h2 id="context-construction">Context construction</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> <span class="tok-kw">mut</span> offline = drywet::Context::new();
 
-<span class="tok-kw">let</span> ctx = Context::new(ContextConfig::default());
-<span class="tok-cm">// same as:</span>
-<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
-    sample_rate: <span class="tok-num">44100</span>,
-    channels: <span class="tok-num">1</span>,
-    sink: <span class="tok-kw">None</span>, <span class="tok-cm">// BufferSink</span>
-});
-
-<span class="tok-kw">let</span> stereo = Context::new(ContextConfig {
-    channels: <span class="tok-num">2</span>,
-    ..<span class="tok-kw">Default</span>::default()
-});
-<span class="tok-kw">let</span> live = Context::new(ContextConfig {
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
-    ..<span class="tok-kw">Default</span>::default()
-});
-<span class="tok-kw">let</span> offline = Context::new(ContextConfig {
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(BufferSink::new())),
-    ..<span class="tok-kw">Default</span>::default()
-});</pre></div>
-<table><thead><tr><th>Property</th><th>Default</th><th>Role</th></tr></thead><tbody><tr><td><code>sample_rate</code></td><td><code>44100</code></td><td>Integer sample clock</td></tr><tr><td><code>channels</code></td><td><code>1</code></td><td>Mono default; stereo allowed</td></tr><tr><td><code>sink</code></td><td><code>BufferSink</code></td><td>Tone Destination analogue — instruments do not <code>connect()</code></td></tr><tr><td><code>transport</code></td><td>one per Context</td><td>Arrangement playhead</td></tr></tbody></table>
-<h2 id="start-stop-pause-toggle">Start, stop, pause, toggle</h2>
-<p><code>state</code> is one of <code>started</code>, <code>stopped</code>, <code>paused</code>.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> t = ctx.transport();
-t.start()?;                 <span class="tok-cm">// returns after the sink accepts first audio</span>
-assert_eq!(t.state(), TransportState::Started);
-t.pause()?;
-t.start()?;                 <span class="tok-cm">// resume from pause</span>
-t.toggle()?;                <span class="tok-cm">// start ↔ pause/stop as in Tone</span>
-t.stop()?;                  <span class="tok-cm">// flush tails, then silence; keep the Context</span></pre></div>
-<p>Stop flushes sounding audio according to release/tail, then silence, without tearing down the Context. Sample cache lives across bars. Shutdown (engine) or dropping the Context tears the sink down.</p>
-<h2 id="bpm-and-time-signature">BPM and time signature</h2>
-<p>Set BPM before start so scheduled events stay sample-accurate. A BPM write while the Transport is started is stored and applied on the next <code>start</code>. There is no <code>bpm.rampTo</code> in v1.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> t = ctx.transport();
-t.set_bpm(<span class="tok-num">128</span>)?;
-t.set_time_signature(<span class="tok-num">4</span>, <span class="tok-num">4</span>)?;
-t.set_time_signature(<span class="tok-num">4</span>, <span class="tok-num">4</span>)?; <span class="tok-cm">// int 4 is accepted as 4/4 at the engine protocol layer</span>
-t.set_time_signature(<span class="tok-num">6</span>, <span class="tok-num">8</span>)?;</pre></div>
-<p>Unlike Tone’s “numerator over 4” reduction, drywet always stores <code>(numerator, denominator)</code> so 6/8 widgets stay 6/8. An int <code>4</code> on the engine protocol is accepted as 4/4.</p>
-<h2 id="looping">Looping</h2>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> t = ctx.transport();
-t.set_loop(<span class="tok-kw">true</span>);
-t.set_loop_start(<span class="tok-str">&quot;0:0:0&quot;</span>)?;
-t.set_loop_end(<span class="tok-str">&quot;2:0:0&quot;</span>)?;
-<span class="tok-cm">// or:</span>
-t.set_loop_points(<span class="tok-str">&quot;0:0:0&quot;</span>, <span class="tok-str">&quot;2:0:0&quot;</span>)?;</pre></div>
-<p>Loop wraps the last tail so each cycle stays the nominal length. Drum tails mix forward into the next bar; the wrap keeps the cycle from growing.</p>
-<h2 id="playhead-and-latency">Playhead and latency</h2>
-<p>Query the playhead from the host process. A UI needle should not be driven from the audio thread or from QTimer guesses.</p>
-<table><thead><tr><th>Property</th><th>Meaning</th></tr></thead><tbody><tr><td><code>position</code></td><td>Bars:beats:sixteenths, e.g. <code>&quot;1:2:0&quot;</code></td></tr><tr><td><code>seconds</code></td><td>Playhead in seconds</td></tr><tr><td><code>ticks</code></td><td>Integer ticks at PPQ (default 192, Tone’s <code>Transport.PPQ</code>)</td></tr><tr><td><code>state</code></td><td><code>started</code> / <code>stopped</code> / <code>paused</code></td></tr><tr><td><code>latency_ms</code></td><td>Stream latency after start (negotiated for PipeWire; <code>0</code> for BufferSink)</td></tr></tbody></table>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> std::time::Instant;
-
-ctx.transport().start()?;
-<span class="tok-kw">let</span> started_at = Instant::now();
-<span class="tok-kw">let</span> latency = ctx.transport().latency_ms() <span class="tok-kw">as</span> f64 / <span class="tok-num">1000.0</span>;
-
-<span class="tok-kw">let</span> visual_seconds = || {
-    <span class="tok-kw">if</span> ctx.transport().state() != TransportState::Started {
-        ctx.transport().seconds()
-    } <span class="tok-kw">else</span> {
-        (started_at.elapsed().as_secs_f64() - latency).max(<span class="tok-num">0.0</span>)
-    }
-};</pre></div>
-<div class="callout warn"><strong>Use the callback time for notes.</strong><p>Scheduled instrument triggers should use the <code>time</code> argument from Sequence / Part / Loop / <code>schedule</code>. Wall-clock alignment is for drawing a playhead, not for placing notes.</p></div>
-<h2 id="low-level-schedule">Low-level schedule</h2>
-<p>Most apps use <a href="scheduling.html">Sequence, Part, and Loop</a>. The Transport also exposes Tone’s timeline primitives.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> t = ctx.transport();
-<span class="tok-kw">let</span> id1 = t.schedule(|time| synth.trigger_attack_release(<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;4n&quot;</span>, <span class="tok-kw">Some</span>(time)), <span class="tok-str">&quot;1m&quot;</span>)?;
-<span class="tok-kw">let</span> id2 = t.schedule_once(|time| println!(<span class="tok-str">&quot;one shot {time}&quot;</span>), <span class="tok-str">&quot;+4n&quot;</span>)?;
-<span class="tok-kw">let</span> id3 = t.schedule_repeat(on_beat, <span class="tok-str">&quot;4n&quot;</span>, <span class="tok-num">0</span>)?;
-
-t.cancel_after(<span class="tok-str">&quot;2:0:0&quot;</span>)?;   <span class="tok-cm">// drop events after this time</span>
-t.clear();                  <span class="tok-cm">// remove scheduled events</span></pre></div>
-<p>Callbacks run on the scheduler thread, not the audio write thread. They must not block and they must not write PCM. Call instrument triggers at <code>time</code>. Schedule length over 600 seconds is an error.</p>
-<h2 id="transport-events">Transport events</h2>
-<p>The Transport emits <code>start</code>, <code>stop</code>, <code>pause</code>, and <code>loop</code> with the event time, as Tone does. Hosts may ignore these and poll <code>position</code>.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>ctx.transport().on(<span class="tok-str">&quot;loop&quot;</span>, |time| println!(<span class="tok-str">&quot;cycle {time}&quot;</span>));
-ctx.transport().on(<span class="tok-str">&quot;start&quot;</span>, |time| println!(<span class="tok-str">&quot;started at {time}&quot;</span>));</pre></div>
-<h2 id="limits">Limits</h2>
-<p>Exceeding a v1 cap returns <code>Err</code> instead of hanging the sink.</p>
-<table><thead><tr><th>Limit</th><th>Range</th></tr></thead><tbody><tr><td>BPM</td><td>40–240</td></tr><tr><td>MIDI notes</td><td>0–127</td></tr><tr><td>Frequency</td><td>20–20000 Hz</td></tr><tr><td>PPQ</td><td>default 192</td></tr><tr><td>Schedule length</td><td>600 seconds</td></tr></tbody></table>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">match</span> ctx.transport().set_bpm(<span class="tok-num">12</span>) {
-    <span class="tok-kw">Err</span>(err) =&gt; eprintln!(<span class="tok-str">&quot;tempo out of range: {err}&quot;</span>),
-    <span class="tok-kw">Ok</span>(()) =&gt; {}
-}</pre></div>
-<div class="callout note"><strong>Thread safety.</strong><p>The audio callback must not allocate, take blocking locks, parse NDJSON, or do file I/O. Note and transport changes arrive through a lock-free queue from another thread. UI hosts should call Transport methods from one control thread.</p></div>
+<span class="tok-kw">let</span> sink = drywet::DeviceSink::new()?;
+<span class="tok-kw">let</span> <span class="tok-kw">mut</span> live = drywet::Context::with(sink.sample_rate(), sink.channels(), sink);</pre></div>
+<p><code>Context::new()</code> creates a 44.1 kHz mono <code>BufferSink</code>. <code>Context::with</code> accepts any <code>Sink</code>; use the sink&#x27;s negotiated format for device output. A context owns one transport and one sink for its lifetime.</p>
+<h2 id="transport-controls">Transport controls</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>live.transport().set_bpm(<span class="tok-num">120.0</span>)?;
+live.transport().set_time_signature(<span class="tok-str">&quot;4/4&quot;</span>)?;
+live.transport().set_loop(<span class="tok-kw">true</span>);
+live.transport().set_loop_points(<span class="tok-str">&quot;0:0:0&quot;</span>, <span class="tok-str">&quot;8:0:0&quot;</span>)?;
+live.transport().start();
+live.transport().pause();
+live.transport().stop();</pre></div>
+<p><code>start</code>, <code>pause</code>, and <code>stop</code> return the transport reference for chaining; do not apply <code>?</code> to them. <code>set_bpm</code>, <code>set_time_signature</code>, and <code>set_loop_points</code> validate their inputs and return a <code>Result</code>.</p>
+<h2 id="rendering-and-playback">Rendering and playback</h2>
+<p><code>ctx.render(duration)</code> advances the transport and renders into the configured sink. For a live phrase:</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>ctx.render(<span class="tok-str">&quot;1m&quot;</span>)?;
+ctx.sink_mut().play()?;
+ctx.sink().wait_until_end()?;</pre></div>
+<p><code>DeviceSink::play</code> opens and starts the native output stream. Keep the process alive while the stream is draining. For a long-running application, call <code>play</code> once, start the transport, and keep the event loop alive while triggering instruments.</p>
+<h2 id="threading">Threading</h2>
+<p>Contexts and instruments are intentionally lightweight and stateful. Keep them together on their owning thread; use an application message queue when a GUI or network thread needs to request notes.</p>
       <footer class="page">
         <a href="getting-started.html">← Getting started</a><a href="time.html">Musical time →</a>
       </footer>

@@ -31,86 +31,43 @@
       <div class="nav-label">Hosts</div>
       <a class="item" href="engine.html">Stdio engine</a>
       <a class="item" href="examples.html">Examples</a>
-      <a class="item" href="api.html">API cheat sheet</a>
+      <a class="item" href="api.html">API reference</a>
     </nav>
     <main id="content">
-      <p class="kicker">Scheduling</p>
-      <h1>Sequence, Part, Loop</h1>
-<nav class="toc"><strong>On this page</strong><ol><li><a href="#the-time-rule">The time rule</a></li><li><a href="#sequence">Sequence</a></li><li><a href="#part">Part</a></li><li><a href="#loop">Loop</a></li><li><a href="#start-stop-dispose">Start, stop, dispose</a></li></ol></nav>
-<p class="lede">These objects attach to the Transport and make no sound of their own. Callbacks receive a sample-accurate <code>time</code> plus a value, and should pass that time into instrument triggers.</p><h2 id="the-time-rule">The time rule</h2>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-cm">// correct</span>
-<span class="tok-kw">let</span> seq = Sequence::new(
-    |time, note| synth.trigger_attack_release(note, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">Some</span>(time)),
-    [<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;G3&quot;</span>, <span class="tok-str">&quot;A3&quot;</span>, <span class="tok-str">&quot;F3&quot;</span>],
-    <span class="tok-str">&quot;4n&quot;</span>,
-);</pre></div>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-cm">// incorrect — missing time argument</span>
-<span class="tok-kw">let</span> seq = Sequence::new(
-    |time, note| synth.trigger_attack_release(note, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">None</span>),
-    [<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>],
-    <span class="tok-str">&quot;4n&quot;</span>,
-);</pre></div>
-<ul><li>Signature is <code>(time, value)</code> as in Tone.</li><li>Callbacks must not block and must not write PCM.</li><li>They run on the scheduler thread, not the audio write thread.</li><li>Nothing sounds until <code>transport.start()</code>.</li></ul>
+      <p class="kicker">Musical events</p>
+      <h1>Scheduling</h1>
+<nav class="toc"><strong>On this page</strong><ol><li><a href="#sequence">Sequence</a></li><li><a href="#part">Part</a></li><li><a href="#loop">Loop</a></li><li><a href="#groups-rests-and-finite-playback">Groups, rests, and finite playback</a></li></ol></nav>
 <h2 id="sequence">Sequence</h2>
-<p><code>Sequence::new(callback, events, subdivision)</code> spaces events evenly on the Transport. Nested lists subdivide, matching Tone Sequence.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> seq = Sequence::new(on_note, [<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;D4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>], <span class="tok-str">&quot;8n&quot;</span>);
-seq.start(<span class="tok-num">0</span>)?;</pre></div>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-cm">// each bar is a quarter; the second event is two eighths</span>
-<span class="tok-kw">use</span> drywet::Event::{Group, Note, Rest};
-
-<span class="tok-kw">let</span> seq = Sequence::new(
-    on_note,
-    [Note(<span class="tok-str">&quot;C4&quot;</span>), Group(vec![Note(<span class="tok-str">&quot;E4&quot;</span>), Note(<span class="tok-str">&quot;G4&quot;</span>)]), Note(<span class="tok-str">&quot;B3&quot;</span>), Rest],
-    <span class="tok-str">&quot;4n&quot;</span>,
-);
-seq.start(<span class="tok-num">0</span>)?;</pre></div>
-<p><code>Rest</code> is a rest. Nested groups split that step equally. Subdivision is the duration of each top-level event.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> bass = Sequence::new(
-    |time, note| bass_synth.trigger_attack_release(note, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">Some</span>(time)),
-    [<span class="tok-num">36</span>, <span class="tok-num">0</span> /* rest */, <span class="tok-num">36</span>, <span class="tok-num">43</span>, <span class="tok-num">36</span>, <span class="tok-num">0</span>, <span class="tok-num">38</span>, <span class="tok-num">43</span>],
+<p><code>Sequence</code> maps values to evenly spaced events. Its callback receives <code>(time_seconds, Option&lt;&amp;str&gt;)</code>:</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> <span class="tok-kw">mut</span> seq = drywet::Sequence::new(
+    <span class="tok-kw">move</span> |time, note| {
+        <span class="tok-kw">if</span> <span class="tok-kw">let</span> <span class="tok-kw">Some</span>(note) = note {
+            <span class="tok-kw">let</span> _ = synth.trigger_attack_release(&amp;ctx, note, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time.into()));
+        }
+    },
+    vec![<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>, <span class="tok-str">&quot;B4&quot;</span>],
     <span class="tok-str">&quot;8n&quot;</span>,
 );
-bass.start(<span class="tok-str">&quot;1m&quot;</span>)?; <span class="tok-cm">// wait one bar, then run</span></pre></div>
-<p>MIDI integers are notes. <code>0</code> as a rest only applies when you use the <code>Event</code> enum — prefer <code>Rest</code> so MIDI note 0 (C-1) stays a pitch.</p>
+seq.start(&amp;<span class="tok-kw">mut</span> ctx.transport(), <span class="tok-num">0</span>)?;</pre></div>
+<p>The first argument to <code>start</code> is a mutable transport reference; the second is the start offset in ticks. Render or start the transport after registering the event.</p>
 <h2 id="part">Part</h2>
-<p><code>Part::new(callback, events)</code> is a list of <code>(time, value)</code> pairs: a scored fragment, not a regular grid.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> part = Part::new(
-    |time, note| piano.trigger_attack_release(note, <span class="tok-str">&quot;4n&quot;</span>, <span class="tok-kw">Some</span>(time)),
-    [
-        (<span class="tok-num">0.</span>into(), <span class="tok-str">&quot;C4&quot;</span>),
-        (<span class="tok-str">&quot;0:1:0&quot;</span>.into(), <span class="tok-str">&quot;E4&quot;</span>),
-        (<span class="tok-str">&quot;0:2:0&quot;</span>.into(), <span class="tok-str">&quot;G4&quot;</span>),
-        (<span class="tok-str">&quot;1:0:0&quot;</span>.into(), <span class="tok-str">&quot;C5&quot;</span>),
-    ],
+<p><code>Part</code> schedules explicit <code>(time, value)</code> pairs:</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> <span class="tok-kw">mut</span> part = drywet::Part::new(
+    <span class="tok-kw">move</span> |time, note| {
+        <span class="tok-kw">let</span> _ = synth.trigger_attack_release(&amp;ctx, note, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">Some</span>(time.into()));
+    },
+    vec![(<span class="tok-str">&quot;0:0:0&quot;</span>, <span class="tok-str">&quot;C4&quot;</span>), (<span class="tok-str">&quot;2:0:0&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>)],
 );
-part.start(<span class="tok-num">0</span>)?;</pre></div>
-<p>When a value is a chord, invoke the callback once per item or trigger each note in the callback — keep it non-blocking either way.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">fn</span> on_event(time: f64, notes: &amp;[&amp;str]) -&gt; drywet::Result&lt;()&gt; {
-    <span class="tok-kw">for</span> note <span class="tok-kw">in</span> notes {
-        piano.trigger_attack_release(*note, <span class="tok-str">&quot;2n&quot;</span>, <span class="tok-kw">Some</span>(time))?;
-    }
-    <span class="tok-kw">Ok</span>(())
-}</pre></div>
+part.start(&amp;<span class="tok-kw">mut</span> ctx.transport(), <span class="tok-num">0</span>)?;</pre></div>
 <h2 id="loop">Loop</h2>
-<p><code>Loop::new(callback, interval)</code> repeats a callback forever (or until stopped) at a fixed musical interval. The value argument may be unused.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> click = Loop::new(
-    |time, _| drum.trigger_attack_release(<span class="tok-str">&quot;hat&quot;</span>, <span class="tok-str">&quot;32n&quot;</span>, <span class="tok-kw">Some</span>(time)),
-    <span class="tok-str">&quot;4n&quot;</span>,
+<p><code>Loop</code> repeats a callback at an interval:</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> <span class="tok-kw">mut</span> looped = drywet::Loop::new(
+    <span class="tok-kw">move</span> |_time| { <span class="tok-kw">let</span> _ = drum.trigger_attack_release(&amp;ctx, <span class="tok-str">&quot;kick&quot;</span>, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">None</span>); },
+    <span class="tok-str">&quot;1m&quot;</span>,
 );
-click.start(<span class="tok-num">0</span>)?;
-ctx.transport().set_bpm(<span class="tok-num">80</span>)?;
-ctx.transport().start()?;</pre></div>
-<h2 id="start-stop-dispose">Start, stop, dispose</h2>
-<table><thead><tr><th>Method</th><th>Effect</th></tr></thead><tbody><tr><td><code>.start(offset)</code></td><td>Attach to Transport at <code>offset</code> (number, note value, or bars:beats:sixteenths)</td></tr><tr><td><code>.stop()</code></td><td>Detach; Transport may keep running</td></tr><tr><td><code>.dispose()</code></td><td>Remove events and drop references</td></tr></tbody></table>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>seq.start(<span class="tok-num">0</span>)?;
-part.start(<span class="tok-str">&quot;1m&quot;</span>)?;
-ctx.transport().start()?;
-<span class="tok-cm">// later:</span>
-seq.stop()?;
-part.dispose();
-ctx.transport().clear();</pre></div>
-<p>Low-level <code>transport.schedule</code> / <code>schedule_once</code> / <code>schedule_repeat</code> are documented on <a href="context-transport.html#low-level-schedule">Context &amp; Transport</a>. Sequence / Part / Loop are the usual app API.</p>
-<p>v1 has no Sequence humanize, probability, or Transport swing.</p>
+looped.start(&amp;<span class="tok-kw">mut</span> ctx.transport(), <span class="tok-num">0</span>)?;</pre></div>
+<h2 id="groups-rests-and-finite-playback">Groups, rests, and finite playback</h2>
+<p>Nested sequence values use <code>drywet::event::SequenceEvent::{Value, Rest, Group}</code> when a phrase needs chords or silence. For offline output, schedule events and call <code>ctx.render(&quot;4m&quot;)?</code>; for device output, render a finite phrase, call <code>ctx.sink_mut().play()?</code>, and wait for the sink to drain. A callback&#x27;s return type is unit, so handle instrument errors inside it.</p>
       <footer class="page">
         <a href="instruments.html">← Instruments</a><a href="output.html">Output sinks →</a>
       </footer>

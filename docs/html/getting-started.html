@@ -31,118 +31,63 @@
       <div class="nav-label">Hosts</div>
       <a class="item" href="engine.html">Stdio engine</a>
       <a class="item" href="examples.html">Examples</a>
-      <a class="item" href="api.html">API cheat sheet</a>
+      <a class="item" href="api.html">API reference</a>
     </nav>
     <main id="content">
-      <p class="kicker">Setup</p>
+      <p class="kicker">First steps</p>
       <h1>Getting started</h1>
-<nav class="toc"><strong>On this page</strong><ol><li><a href="#install">Install</a></li><li><a href="#play-a-synth-note">Play a synth note</a></li><li><a href="#schedule-a-sequence">Schedule a sequence</a></li><li><a href="#render-without-a-sound-server">Render without a sound server</a></li><li><a href="#mix-a-live-note-onto-playback">Mix a live note onto playback</a></li><li><a href="#spawn-the-engine-from-a-ui">Spawn the engine from a UI</a></li><li><a href="#next">Next</a></li></ol></nav>
-<p class="lede">Create a Context, attach an instrument, schedule events on the Transport, then start the clock. The same steps apply to live widgets and offline tests.</p><h2 id="install">Install</h2>
-<h3 id="library">Library</h3>
-<p>Add the crate to an app that already uses Cargo:</p>
-<div class="code"><div class="meta"><span>Cargo.toml</span><button class="copy" type="button">Copy</button></div><pre># Cargo.toml
-[dependencies]
-drywet = { git = <span class="tok-str">&quot;https://github.com/markschellhas/drywet&quot;</span> }</pre></div>
-<p>Or clone this repo and use the path:</p>
-<div class="code"><div class="meta"><span>Cargo.toml</span><button class="copy" type="button">Copy</button></div><pre>drywet = { path = <span class="tok-str">&quot;../drywet&quot;</span> }</pre></div>
-<p><code>Context</code> defaults to <code>BufferSink</code> so tests never open PipeWire. For live output, pass a <code>PipeWireSink</code> or use the engine binary.</p>
-<h3 id="engine-binary">Engine binary</h3>
-<p>Build and run the stdio host:</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>cargo run --bin drywet-engine
-cargo run --bin drywet-engine -- --buffer   # BufferSink, no sound server</pre></div>
-<p>Install a local binary if a host should spawn it by name:</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>cargo install --path . --bin drywet-engine</pre></div>
-<h3 id="vendored-widget-primary-v1-path">Vendored widget (primary v1 path)</h3>
-<p>Plugin hosts that clone git and skip a compiler should vendor a prebuilt <code>drywet-engine</code> next to the UI. The end user does not install drywet separately.</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>my-widget/
-  ui/                    # QML, CLI, or other host files
-  samples/C4.wav
-  bin/drywet-engine      # vendored Linux binary</pre></div>
-<p>The host spawns <code>bin/drywet-engine</code> and speaks NDJSON. Sample banks stay in the consumer’s repo — drywet does not download sounds.</p>
-<div class="callout note"><strong>Sample banks are not included.</strong><p>Callers pass WAV paths. A widget that vendors the engine should also vendor its own <code>samples/</code>.</p></div>
-<h2 id="play-a-synth-note">Play a synth note</h2>
-<p>The built-in additive Synth can fill chord and key widgets when no sample bank is loaded. Live triggers omit <code>time</code> (<code>None</code>) and mix at the current write cursor.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, PipeWireSink, Synth};
+<nav class="toc"><strong>On this page</strong><ol><li><a href="#install">Install</a></li><li><a href="#play-one-note">Play one note</a></li><li><a href="#schedule-a-phrase">Schedule a phrase</a></li><li><a href="#offline-rendering">Offline rendering</a></li><li><a href="#engine-mode">Engine mode</a></li></ol></nav>
+<h2 id="install">Install</h2>
+<p>Add the crate to <code>Cargo.toml</code>:</p>
+<div class="code"><div class="meta"><span>Cargo.toml</span><button class="copy" type="button">Copy</button></div><pre>[dependencies]
+drywet = <span class="tok-str">&quot;0.1&quot;</span></pre></div>
+<p>On macOS, CPAL uses CoreAudio. On Linux and other platforms it uses the host&#x27;s default CPAL backend. The examples use <code>DeviceSink</code>, so they play through the default device rather than a mock sink.</p>
+<h2 id="play-one-note">Play one note</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, DeviceSink, Synth};
 
-<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
-    ..<span class="tok-kw">Default</span>::default()
-});
-<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
+<span class="tok-kw">fn</span> main() -&gt; Result&lt;(), <span class="tok-kw">Box</span>&lt;dyn std::error::Error&gt;&gt; {
+    <span class="tok-kw">let</span> sink = DeviceSink::new()?;
+    <span class="tok-kw">let</span> <span class="tok-kw">mut</span> ctx = Context::with(sink.sample_rate(), sink.channels(), sink);
+    <span class="tok-kw">let</span> <span class="tok-kw">mut</span> synth = Synth::new(&amp;ctx);
+    synth.trigger_attack_release(&amp;ctx, <span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;2n&quot;</span>, <span class="tok-kw">None</span>)?;
+    ctx.render(<span class="tok-str">&quot;1m&quot;</span>)?;
+    ctx.sink_mut().play()?;
+    ctx.sink().wait_until_end()?;
+    <span class="tok-kw">Ok</span>(())
+}</pre></div>
+<p><code>Context::new()</code> is the convenient <code>BufferSink</code> context for offline work. <code>Context::with(rate, channels, sink)</code> is used when the sink determines the audio format, as with <code>DeviceSink</code>.</p>
+<h2 id="schedule-a-phrase">Schedule a phrase</h2>
+<p>Callbacks receive the scheduled time in seconds and an optional event value. Instrument methods take the context explicitly:</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, DeviceSink, Sequence, Synth};
+<span class="tok-kw">use</span> std::{cell::RefCell, rc::Rc};
 
-ctx.transport().set_bpm(<span class="tok-num">100</span>)?;
-ctx.transport().start()?;
-synth.trigger_attack_release(<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;2n&quot;</span>, <span class="tok-kw">None</span>)?; <span class="tok-cm">// now, on the write cursor</span></pre></div>
-<p><code>start()</code> returns when the sink has accepted the first audio (immediately for <code>BufferSink</code>) and exposes <code>latency_ms</code> so a UI playhead can align.</p>
-<h2 id="schedule-a-sequence">Schedule a sequence</h2>
-<p>A Sequence is silent until <code>Transport::start()</code>. The callback receives a sample-accurate <code>time</code> and should pass it into the instrument.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, PipeWireSink, Sequence, Synth};
-
-<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
-    ..<span class="tok-kw">Default</span>::default()
-});
-<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
-
-<span class="tok-kw">let</span> seq = Sequence::new(
-    |time, note| synth.trigger_attack_release(note, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">Some</span>(time)),
-    [<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>, <span class="tok-str">&quot;B4&quot;</span>],
-    <span class="tok-str">&quot;4n&quot;</span>,
+<span class="tok-kw">let</span> sink = DeviceSink::new()?;
+<span class="tok-kw">let</span> <span class="tok-kw">mut</span> ctx = Context::with(sink.sample_rate(), sink.channels(), sink);
+<span class="tok-kw">let</span> synth = Rc::new(RefCell::new(Synth::new(&amp;ctx)));
+<span class="tok-kw">let</span> voice = Rc::clone(&amp;synth);
+<span class="tok-kw">let</span> <span class="tok-kw">mut</span> seq = Sequence::new(
+    <span class="tok-kw">move</span> |time, note| {
+        <span class="tok-kw">if</span> <span class="tok-kw">let</span> <span class="tok-kw">Some</span>(note) = note {
+            <span class="tok-kw">let</span> _ = voice.borrow_mut().trigger_attack_release(
+                &amp;ctx, note, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time.into()),
+            );
+        }
+    },
+    vec![<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;D4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>],
+    <span class="tok-str">&quot;8n&quot;</span>,
 );
-seq.start(<span class="tok-num">0</span>)?;
-
-<span class="tok-kw">let</span> t = ctx.transport();
-t.set_loop(<span class="tok-kw">true</span>);
-t.set_loop_points(<span class="tok-str">&quot;0:0:0&quot;</span>, <span class="tok-str">&quot;1:0:0&quot;</span>)?;
-t.set_bpm(<span class="tok-num">120</span>)?;
-t.start()?;</pre></div>
-<h2 id="render-without-a-sound-server">Render without a sound server</h2>
-<p>CI and unit tests use <code>BufferSink</code> so they do not open PipeWire. That is also the <code>Context</code> default.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{BufferSink, Context, ContextConfig, Synth};
-
-<span class="tok-kw">let</span> sink = BufferSink::new();
-<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(sink)),
-    ..<span class="tok-kw">Default</span>::default()
-});
-<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
-synth.trigger_attack_release(<span class="tok-str">&quot;A4&quot;</span>, <span class="tok-str">&quot;4n&quot;</span>, <span class="tok-kw">Some</span>(<span class="tok-num">0.0</span>))?;
-
-<span class="tok-kw">let</span> pcm = ctx.transport().render(<span class="tok-str">&quot;1m&quot;</span>)?;
-assert!(!pcm.is_empty());</pre></div>
-<p>Or rely on the default sink:</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> ctx = Context::new(ContextConfig::default());</pre></div>
-<h2 id="mix-a-live-note-onto-playback">Mix a live note onto playback</h2>
-<p>A chord widget, MIDI keyboard, or click can fire notes while a Sequence is running. Those notes mix onto the same stream. A second Transport, or a process per note, is not needed.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, Drum, Loop, PipeWireSink, Synth};
-
-<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
-    ..<span class="tok-kw">Default</span>::default()
-});
-<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
-<span class="tok-kw">let</span> drum = Drum::new(&amp;ctx);
-
-<span class="tok-kw">let</span> click = Loop::new(
-    |time, _| drum.trigger_attack_release(<span class="tok-str">&quot;kick&quot;</span>, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time)),
-    <span class="tok-str">&quot;4n&quot;</span>,
-);
-click.start(<span class="tok-num">0</span>)?;
-ctx.transport().start()?;
-
-<span class="tok-cm">// UI key-down: mix immediately, no time argument</span>
-synth.trigger_attack_release(<span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">None</span>)?;</pre></div>
-<h2 id="spawn-the-engine-from-a-ui">Spawn the engine from a UI</h2>
-<p>Hosts that cannot link Rust spawn one persistent engine process and write NDJSON lines to stdin.</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{&quot;cmd&quot;: &quot;warmup&quot;, &quot;instrument&quot;: &quot;synth&quot;}
-{&quot;cmd&quot;: &quot;start&quot;, &quot;bpm&quot;: 120, &quot;loop&quot;: true}
-{&quot;cmd&quot;: &quot;play-midi&quot;, &quot;note&quot;: &quot;C4&quot;, &quot;duration&quot;: &quot;8n&quot;}
-{&quot;cmd&quot;: &quot;stop&quot;}
-{&quot;cmd&quot;: &quot;shutdown&quot;}</pre></div>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>cargo run --bin drywet-engine</pre></div>
-<p>Full command list and schedule payloads: <a href="engine.html">Stdio engine</a>.</p>
-<h2 id="next">Next</h2>
-<ul><li><a href="context-transport.html">Context &amp; Transport</a> — playhead, loop, BPM, latency</li><li><a href="time.html">Musical time</a> — <code>&quot;4n&quot;</code>, dotted, triplets, bars:beats:sixteenths</li><li><a href="examples.html">Examples</a> — metronome, drums, sampler, CI</li></ul>
+ctx.transport().set_bpm(<span class="tok-num">124.0</span>)?;
+seq.start(&amp;<span class="tok-kw">mut</span> ctx.transport(), <span class="tok-num">0</span>)?;
+ctx.render(<span class="tok-str">&quot;2m&quot;</span>)?;
+ctx.sink_mut().play()?;
+ctx.sink().wait_until_end()?;</pre></div>
+<p>Use <code>ctx.transport().start()</code> only for a live, long-running transport. It returns the transport reference, not a <code>Result</code>; scheduled events then run as the process remains alive.</p>
+<h2 id="offline-rendering">Offline rendering</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> <span class="tok-kw">mut</span> ctx = Context::new();
+<span class="tok-kw">let</span> pcm = ctx.render(<span class="tok-str">&quot;4n&quot;</span>)?;</pre></div>
+<p><code>render</code> advances the transport and fills a <code>BufferSink</code>. It does not open an audio device. Use <code>BufferSink::into_samples()</code> or <code>ctx.sink().samples()</code> to inspect the result.</p>
+<h2 id="engine-mode">Engine mode</h2>
+<p>Run <code>cargo run --bin drywet-engine</code> for native device output, or pass <code>--buffer</code> for a deterministic in-memory sink. The engine reads one JSON object per line; see <a href="engine.html">Engine protocol</a>.</p>
       <footer class="page">
         <a href="index.html">← Overview</a><a href="context-transport.html">Context &amp; Transport →</a>
       </footer>

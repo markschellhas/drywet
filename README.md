@@ -156,7 +156,7 @@ Or pipe a session yourself:
 ```text
 printf '%s\n' \
   '{"cmd":"warmup","instrument":"drum"}' \
-  '{"cmd":"start","bpm":100,"loop":true,"schedule":{"type":"loop","interval":"4n","note":"kick","duration":"16n"}}' \
+  '{"cmd":"start","bpm":100,"loop":{"interval":"4n","note":"kick","duration":"16n"}}' \
   '{"cmd":"play-midi","note":"hat","duration":"32n"}' \
   '{"cmd":"stop"}' \
   '{"cmd":"shutdown"}' \
@@ -171,7 +171,7 @@ cargo test
 
 ## What v1 does not include
 
-Web Audio nodes, effects, swing, velocity layers, Ableton Link, a mixer UI, recording, or a Python runtime. See the [API cheat sheet](docs/api.md#not-in-v1).
+Web Audio nodes, effects, swing, velocity layers, Ableton Link, a mixer UI, recording, or a Python runtime. See the [API reference](docs/api.md).
 
 ## License
 

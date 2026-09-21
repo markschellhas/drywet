@@ -31,84 +31,30 @@
       <div class="nav-label">Hosts</div>
       <a class="item" href="engine.html">Stdio engine</a>
       <a class="item" href="examples.html">Examples</a>
-      <a class="item" href="api.html">API cheat sheet</a>
+      <a class="item" href="api.html">API reference</a>
     </nav>
     <main id="content">
-      <p class="kicker">PCM output</p>
-      <h1>Output sinks</h1>
-<nav class="toc"><strong>On this page</strong><ol><li><a href="#pipewiresink">PipeWireSink</a></li><li><a href="#buffersink-and-render">BufferSink and render</a></li><li><a href="#custom-sinks">Custom sinks</a></li><li><a href="#live-mix">Live mix</a></li></ol></nav>
-<p class="lede">drywet writes raw PCM. The Linux live path is a persistent PipeWire callback. Tests and offline bounce use an in-memory <code>BufferSink</code>. A custom sink implements the <code>Sink</code> trait: <code>write</code>, <code>mix</code>, <code>stop</code>, <code>close</code>, plus <code>latency_ms</code>, <code>write_cursor</code>, and <code>accepted</code>.</p><h2 id="pipewiresink">PipeWireSink</h2>
-<p>Live default on Linux when you pass one in (the engine binary does this). One persistent stream. No <code>pw-play</code> / <code>pw-cat</code> child per hit.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, PipeWireSink};
-
-<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
-    ..<span class="tok-kw">Default</span>::default()
-});
-<span class="tok-kw">let</span> stereo = Context::new(ContextConfig {
-    channels: <span class="tok-num">2</span>,
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
-    ..<span class="tok-kw">Default</span>::default()
-});</pre></div>
-<ul><li>PipeWire is output. The Transport is the arrangement clock; <code>pw-play</code> of discrete files is not.</li><li><code>start()</code> opens one long-lived callback stream. <code>latency_ms</code> is the measured or negotiated stream latency, not a hardcoded 80 ms.</li><li>The callback path does not allocate, parse NDJSON, or do file I/O. Notes arrive from a preallocated queue filled on another thread.</li><li><code>Transport::stop()</code> keeps the stream open and writes silence. Only <code>close()</code> / dropping the Context tears the device down.</li><li>Live and one-shot audio mix at the write cursor. Hosts should not keep a second PipeWire clock.</li><li>Use one process and one sink. A process per note is not supported.</li></ul>
-<p>The <code>Sink</code> trait is the extension point. A later <code>cpal</code> backend can cover other machines without changing the musician API.</p>
-<div class="callout warn"><strong>Tests use BufferSink.</strong><p>Hardware devices, JACK, and PipeWire are out of scope for automated tests. CI runs <code>cargo test</code> with BufferSink only.</p></div>
-<h2 id="buffersink-and-render">BufferSink and render</h2>
-<p>In-memory PCM for tests and <code>transport.render(duration)</code> — Tone Offline *role*, not <code>OfflineAudioContext</code>. <code>Context</code> defaults to this sink.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{BufferSink, Context, ContextConfig, Sequence, Synth};
-
-<span class="tok-kw">let</span> sink = BufferSink::new();
-<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(sink)),
-    sample_rate: <span class="tok-num">44100</span>,
-    channels: <span class="tok-num">1</span>,
-});
-<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
-
-<span class="tok-kw">let</span> seq = Sequence::new(
-    |time, note| synth.trigger_attack_release(note, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">Some</span>(time)),
-    [<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>, <span class="tok-str">&quot;C5&quot;</span>],
-    <span class="tok-str">&quot;8n&quot;</span>,
-);
-seq.start(<span class="tok-num">0</span>)?;
-ctx.transport().set_bpm(<span class="tok-num">120</span>)?;
-
-<span class="tok-kw">let</span> pcm = ctx.transport().render(<span class="tok-str">&quot;1m&quot;</span>)?;
-assert_eq!(
-    pcm.len(),
-    (ctx.to_seconds(<span class="tok-str">&quot;1m&quot;</span>)? * ctx.sample_rate() <span class="tok-kw">as</span> f64) <span class="tok-kw">as</span> usize
-);
-assert!(pcm.iter().any(|sample| *sample != <span class="tok-num">0.0</span>));</pre></div>
-<p>Scheduled arrangement is rendered onto the sample clock (concatenation with tails mixed forward). Bar 1, step 0 is sample 0 of that bar.</p>
-<p><code>mix(frames, at_sample)</code> adds into an expanding <code>f32</code> buffer. Stereo duplicates a mono frame across channels. <code>write(frames)</code> mixes at <code>write_cursor</code> and advances it. <code>to_pcm_s16le</code> clips to [-1, 1] and packs little-endian i16. <code>stop</code> / <code>close</code> are no-ops. <code>latency_ms</code> is 0. <code>accepted</code> becomes true after the first mix/write.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> pcm = ctx.transport().render(<span class="tok-str">&quot;2m&quot;</span>)?;
-<span class="tok-kw">let</span> bytes = sink.to_pcm_s16le();
-std::fs::write(<span class="tok-str">&quot;phrase.wav&quot;</span>, wav_header_and_bytes(&amp;ctx, &amp;bytes))?;</pre></div>
-<h2 id="custom-sinks">Custom sinks</h2>
-<p>Apps may pass any type that implements <code>Sink</code>:</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">struct</span> NullSink;
-
-<span class="tok-kw">impl</span> drywet::Sink <span class="tok-kw">for</span> NullSink {
-    <span class="tok-kw">fn</span> write(&amp;<span class="tok-kw">mut</span> <span class="tok-kw">self</span>, frames: &amp;[f32]) { <span class="tok-kw">let</span> _ = frames; }
-    <span class="tok-kw">fn</span> mix(&amp;<span class="tok-kw">mut</span> <span class="tok-kw">self</span>, frames: &amp;[f32], at_sample: usize) { <span class="tok-kw">let</span> _ = (frames, at_sample); }
-    <span class="tok-kw">fn</span> stop(&amp;<span class="tok-kw">mut</span> <span class="tok-kw">self</span>) {}
-    <span class="tok-kw">fn</span> close(&amp;<span class="tok-kw">mut</span> <span class="tok-kw">self</span>) {}
-    <span class="tok-kw">fn</span> latency_ms(&amp;<span class="tok-kw">self</span>) -&gt; u32 { <span class="tok-num">0</span> }
-    <span class="tok-kw">fn</span> write_cursor(&amp;<span class="tok-kw">self</span>) -&gt; usize { <span class="tok-num">0</span> }
-    <span class="tok-kw">fn</span> accepted(&amp;<span class="tok-kw">self</span>) -&gt; bool { <span class="tok-kw">true</span> }
-}
-
-<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
-    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(NullSink)),
-    ..<span class="tok-kw">Default</span>::default()
-});</pre></div>
-<p><code>write</code> consumes the arranged stream. <code>mix</code> overlays one-shots at a sample index. <code>stop</code> stops the arrangement and keeps the destination open; <code>close</code> releases the device or buffer.</p>
-<h2 id="live-mix">Live mix</h2>
-<p>Live notes (keys, clicks, MIDI) mix onto the write cursor of the playing stream. Held <code>trigger_attack</code> voices keep sounding on that mixer until release. A practice metronome and a chord widget can share one engine this way. After <code>Transport::stop()</code>, a click still uses the same open stream — no device handshake.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>ctx.transport().start()?;
-<span class="tok-cm">// arrangement already rendering into the sink...</span>
-synth.trigger_attack_release(<span class="tok-str">&quot;A4&quot;</span>, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">None</span>)?; <span class="tok-cm">// mixed now</span></pre></div>
-<p>v1 renders onto integer sample frames in Rust. Per-sample DSP is not a public contract for hosts; they only trigger instruments at <code>time</code>.</p>
+      <p class="kicker">Sinks</p>
+      <h1>Audio output</h1>
+<nav class="toc"><strong>On this page</strong><ol><li><a href="#native-device-output">Native device output</a></li><li><a href="#buffer-output">Buffer output</a></li><li><a href="#pipewire-sink">PipeWire sink</a></li><li><a href="#sink-lifecycle">Sink lifecycle</a></li></ol></nav>
+<h2 id="native-device-output">Native device output</h2>
+<p><code>DeviceSink</code> uses CPAL&#x27;s default output device (CoreAudio on macOS and the platform&#x27;s native CPAL host elsewhere):</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> sink = drywet::DeviceSink::new()?;
+<span class="tok-kw">let</span> <span class="tok-kw">mut</span> ctx = drywet::Context::with(sink.sample_rate(), sink.channels(), sink);
+<span class="tok-cm">// schedule events...</span>
+ctx.render(<span class="tok-str">&quot;1m&quot;</span>)?;
+ctx.sink_mut().play()?;
+ctx.sink().wait_until_end()?;</pre></div>
+<p>The device chooses the sample rate and channel count. Query those values before constructing the context so scheduling and rendering use the same format.</p>
+<h2 id="buffer-output">Buffer output</h2>
+<p><code>Context::new()</code> creates a 44.1 kHz mono <code>BufferSink</code>:</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> <span class="tok-kw">mut</span> ctx = drywet::Context::new();
+<span class="tok-kw">let</span> pcm = ctx.render(<span class="tok-str">&quot;1m&quot;</span>)?;</pre></div>
+<p>Use this sink for tests, waveform inspection, and file/export pipelines. It never opens an audio device.</p>
+<h2 id="pipewire-sink">PipeWire sink</h2>
+<p><code>PipeWireSink::new(sample_rate, channels)</code> is a callback sink for integration and testing. It is not the default live path for examples and does not select or open a system output device. Use <code>DeviceSink</code> for audible playback.</p>
+<h2 id="sink-lifecycle">Sink lifecycle</h2>
+<p>The <code>Sink</code> trait exposes <code>write</code>, <code>play</code>, <code>stop</code>, <code>is_playing</code>, and <code>wait_until_end</code>. Rendering fills the sink; <code>play</code> starts playback. Keep the process alive until <code>wait_until_end</code> returns, or keep a live transport and stream running in your application&#x27;s event loop.</p>
       <footer class="page">
         <a href="scheduling.html">← Sequence, Part, Loop</a><a href="engine.html">Stdio engine →</a>
       </footer>

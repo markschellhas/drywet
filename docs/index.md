@@ -2,81 +2,56 @@
 
 <!-- kicker: Overview -->
 
-drywet is a Rust library and a small stdio binary that give desktop music widgets a musician-facing runtime: one Transport, musical time, Sampler, simple synths and drums, Sequence / Part / Loop, and live notes mixed onto one playing stream.
+`drywet` is a small Rust runtime for arranging notes, rendering a sample-accurate timeline, and sending the result to an audio output. It supports native device playback through CPAL, deterministic offline rendering, and a line-oriented engine for UI integrations.
 
-Tone.js feels complete because it is two layers: a musician API (Transport, `"4n"` time, Sampler, Sequence) and a hard audio engine (the browser). drywet takes the first layer and implements the second in Rust on PipeWire.
+## Quick start
 
 ```rust
-use drywet::{Context, ContextConfig, Sequence, Synth};
+use drywet::{Context, DeviceSink, Sequence, Synth};
+use std::{cell::RefCell, rc::Rc};
 
-let ctx = Context::new(ContextConfig::default());
-let synth = Synth::new(&ctx);
-let seq = Sequence::new(
-    |time, note| synth.trigger_attack_release(note, "8n", Some(time)),
-    ["C4", "G3", "A3", "F3"],
-    "1m",
-);
-seq.start(0)?;
-ctx.transport().set_bpm(120)?;
-ctx.transport().start()?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let sink = DeviceSink::new()?;
+    let mut ctx = Context::with(sink.sample_rate(), sink.channels(), sink);
+    let synth = Rc::new(RefCell::new(Synth::new(&ctx)));
+    let voice = Rc::clone(&synth);
+    let mut seq = Sequence::new(
+        move |time, note| {
+            if let Some(note) = note {
+                let _ = voice.borrow_mut().trigger_attack_release(
+                    &ctx, note, "8n", Some(time.into()),
+                );
+            }
+        },
+        vec!["C4", "E4", "G4", "B4"],
+        "8n",
+    );
+
+    ctx.transport().set_bpm(120.0)?;
+    seq.start(&mut ctx.transport(), 0)?;
+    ctx.render("1m")?;
+    ctx.sink_mut().play()?;
+    ctx.sink().wait_until_end()?;
+    Ok(())
+}
 ```
 
-Instruments use `trigger_attack_release`. Sequences attach to the Transport. The callback’s `time` argument is the sample clock, rather than `thread::sleep` or a UI timer.
+The complete runnable versions are in [`examples/`](../examples/README.md). `DeviceSink` selects the native default output device and negotiates its sample rate and channel count.
 
-A Python prototype of the same API lives in [drywet-py](https://github.com/markschellhas/drywet-py). That package is reference only. This repo does not depend on it.
+## Runtime pieces
 
-## Who it is for
-
-**In-process Rust.** CLI tools, desktop helpers, and later standalone apps import `drywet` and call Context, Transport, and instruments directly.
-
-**Out-of-process UIs.** QML overlays (Omarchy bar or menu plugins) spawn `drywet-engine` and speak NDJSON. The library does not depend on Qt.
-
-**Vendored widgets.** Plugin hosts vendor a prebuilt Linux binary. End users do not run `cargo` or `pip`.
-
-**Tests and CI.** `BufferSink` and `transport.render()` keep tests off a sound server.
-
-## Architecture
-
-drywet follows Tone.js’s musician layer: a playhead, `"4n"` time, Sampler, and Sequence. Linux output is a persistent PipeWire callback (not one `pw-play` per hit).
-
-| Layer | Role |
+| Piece | Role |
 | --- | --- |
-| UI process | QML, CLI, or other host |
-| NDJSON | optional; in-process apps skip this |
-| Rust runtime | `drywet` Context + Transport |
-| raw PCM | s16le, 44100, default mono |
-| PipeWireSink | one persistent stream |
-| BufferSink | offline / CI path |
+| `Context` | Owns the transport, timeline, and sink. |
+| `Sequence`, `Part`, `Loop` | Schedule callbacks on musical time. |
+| `Synth`, `Drum`, `Sampler` | Generate voices and sample-backed sounds. |
+| `DeviceSink` | Native live output through CPAL. |
+| `BufferSink` | Deterministic in-memory rendering for tests and exports. |
+| `PipeWireSink` | Callback sink retained for integration/testing; it is not the live example output. |
+| `drywet-engine` | JSON-lines control process for external UIs. |
 
-## Feature map
+See [Getting started](getting-started.md), [Scheduling](scheduling.md), [Output](output.md), and [Engine protocol](engine.md).
 
-| You want to… | Use | Docs |
-| --- | --- | --- |
-| Own sample rate, channels, sink, and one clock | `Context` | [Context & Transport](context-transport.md) |
-| Start, stop, loop, set BPM, read the playhead | `ctx.transport()` | [Context & Transport](context-transport.md) |
-| Write `"8n"`, `"1m"`, `"0:2:0"` | `to_seconds` / `to_ticks` | [Musical time](time.md) |
-| Map WAV files to notes and pitch-fill the rest | `Sampler` | [Instruments](instruments.md) |
-| Play a chord widget with no sample bank | `Synth` | [Instruments](instruments.md) |
-| Kick / snare / hi-hat grids | `Drum` | [Instruments](instruments.md) |
-| Repeat events on the Transport | `Sequence`, `Part`, `Loop` | [Scheduling](scheduling.md) |
-| Hear audio on Linux, or capture PCM in tests | `PipeWireSink`, `BufferSink` | [Output sinks](output.md) |
-| Drive drywet from a non-Rust UI | `drywet-engine` | [Stdio engine](engine.md) |
+## Design constraints
 
-## Constraints
-
-- **Sample clock.** Arrangement is rendered onto integer sample frames. Language timers are not used as the clock.
-- **Single sink.** Live notes mix onto the write cursor of the playing stream. A process per note is not supported.
-- **PipeWire is output.** A callback stream plays PCM. The Transport is the playhead.
-- **Playhead alignment.** After `start()`, use `started` plus `latency_ms` (the negotiated stream latency) for a UI needle. `QTimer` guesses will drift.
-- **Stop keeps the process.** Sample cache lives across bars. `shutdown` tears the engine down.
-
-> [!NOTE]
-> **Scope.** drywet does not include `AudioContext`, Gain nodes, effects, swing, velocity layers, or a mixer UI. Rust names are snake_case. Type names stay Transport, Sampler, Sequence, Part, Loop.
-
-## Install paths
-
-**Vendored widget (v1 primary).** The plugin repo vendors a prebuilt `drywet-engine` Linux binary. The end user does not install Rust.
-
-**In-process crate.** Apps that already use Cargo depend on `drywet` and call the library directly.
-
-See [Getting started](getting-started.md) for a first sound, or [Examples](examples.md) for longer sketches.
+The transport is sample-clocked, so a context has one sample rate and channel count for its lifetime. Live playback renders a finite phrase, starts the sink, and keeps the process alive until the sink drains. For interactive applications, keep the context and instruments on their owning thread and trigger notes while the device is playing.

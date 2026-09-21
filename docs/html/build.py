@@ -20,7 +20,7 @@ PAGES = [
     ("output.md", "output.html", "Output sinks", "Runtime"),
     ("engine.md", "engine.html", "Stdio engine", "Hosts"),
     ("examples.md", "examples.html", "Examples", "Hosts"),
-    ("api.md", "api.html", "API cheat sheet", "Hosts"),
+    ("api.md", "api.html", "API reference", "Hosts"),
 ]
 
 NAV_GROUPS = [
@@ -50,12 +50,12 @@ TITLES = {
     "output.html": "Output sinks — drywet",
     "engine.html": "Stdio engine — drywet",
     "examples.html": "Examples — drywet",
-    "api.html": "API cheat sheet — drywet",
+    "api.html": "API reference — drywet",
 }
 
 FOOTERS = {
     "index.html": (
-        "<span>drywet v1 draft API, from the product spec</span>"
+        "<span>drywet API reference</span>"
         '<a href="getting-started.html">Getting started →</a>'
     ),
     "getting-started.html": (
@@ -88,7 +88,7 @@ FOOTERS = {
     ),
     "examples.html": (
         '<a href="engine.html">← Stdio engine</a>'
-        '<a href="api.html">API cheat sheet →</a>'
+        '<a href="api.html">API reference →</a>'
     ),
     "api.html": (
         '<a href="examples.html">← Examples</a>'

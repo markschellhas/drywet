@@ -1,195 +1,39 @@
-# Stdio engine
+# Engine protocol
 
-<!-- kicker: Host adapter -->
+<!-- kicker: JSON lines -->
 
-QML overlays and other UIs that cannot link Rust spawn `drywet-engine`. The process reads NDJSON on stdin and writes NDJSON on stdout. In-process apps import the `drywet` crate instead of spawning the engine.
+Run the engine with native output:
 
-The verbs match [drywet-py](https://github.com/markschellhas/drywet-py) so an Omarchy widget can switch hosts without a new protocol.
-
-## Spawn
-
-Spawn one persistent child. Sample cache lives across bars. `stop` keeps the process; `shutdown` exits.
-
-```text
+```sh
 cargo run --bin drywet-engine
-# or a vendored binary:
-./bin/drywet-engine
-# tests / CI:
-cargo run --bin drywet-engine -- --buffer
 ```
 
-Default sink is PipeWire. `--buffer` uses `BufferSink`.
+Use `--buffer` when a caller needs deterministic in-memory rendering instead of a system device. The process reads one JSON object per line and writes one JSON response per command.
 
-```rust
-use std::io::Write;
-use std::process::{Command, Stdio};
+## Start a phrase
 
-let mut proc = Command::new("drywet-engine")
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .spawn()?;
-
-{
-    let stdin = proc.stdin.as_mut().unwrap();
-    writeln!(stdin, r#"{{"cmd":"warmup","instrument":"synth"}}"#)?;
-}
+```json
+{"cmd":"start","bpm":120,"loop":true,"sequence":{"events":["C4","E4","G4"],"subdivision":"8n"}}
 ```
 
-Each message is one JSON object on one line. Pretty-printing across lines will break the parser.
+The supported top-level schedule fields are `sequence`, `part`, and `loop`. A boolean `loop` enables transport looping; an object describes a repeating loop event:
+
+```json
+{"cmd":"start","bpm":90,"loop":{"interval":"4n","note":"kick","duration":"16n"}}
+```
 
 ## Commands
 
-| cmd | Tone analogue | Role |
-| --- | --- | --- |
-| `warmup` | Sampler load | Load Synth, Drum, or Sampler; open the sink |
-| `start` | `Transport.start` | Start Transport (optional loop, bpm, schedule payload) |
-| `stop` | `Transport.stop` | Stop Transport; destination keeps writing silence |
-| `pause` | `pause` | Pause clock |
-| `resume` | `start` from pause | Resume clock |
-| `play-midi` | `triggerAttackRelease` now | One-shot live notes on the current instrument |
-| `note-on` / `note-off` | `triggerAttack` / `triggerRelease` | Held voice; also accepted as `trigger_attack` / `trigger_release` |
-| `bpm` | `Transport.bpm` | Set tempo (applied on the next `start` if already running) |
-| `shutdown` | `dispose` | Close sink and exit |
+- `warmup` initializes the engine.
+- `start` schedules the supplied phrase and starts the transport.
+- `stop`, `pause`, and `resume` control transport state.
+- `bpm` changes tempo.
+- `play-midi` triggers a MIDI note for a duration.
+- `note-on`/`trigger_attack` and `note-off`/`trigger_release` control a voice.
+- `shutdown` ends the process.
 
-### warmup
+Responses are JSON objects such as `{"ok":true}`. Starting transport also emits a `started` event with latency and position fields. Invalid commands or payloads return `{"error":"..."}`.
 
-```text
-{"cmd": "warmup", "instrument": "synth"}
-{"cmd": "warmup", "instrument": "drum"}
-{"cmd": "warmup", "instrument": "sampler", "directory": "samples/"}
-{"cmd": "warmup", "instrument": "sampler", "urls": {"C4": "samples/C4.wav", "G4": "samples/G4.wav"}}
-```
+## Process lifetime
 
-### start / stop / pause / resume
-
-```text
-{"cmd": "start", "bpm": 120, "loop": true, "loopStart": "0:0:0", "loopEnd": "1:0:0"}
-{"cmd": "pause"}
-{"cmd": "resume"}
-{"cmd": "stop"}
-```
-
-### play-midi, note-on / note-off, and bpm
-
-```text
-{"cmd": "play-midi", "note": "C4", "duration": "8n"}
-{"cmd": "note-on", "note": "C4"}
-{"cmd": "note-off", "note": "C4"}
-{"cmd": "play-midi", "note": 60, "duration": "4n"}
-{"cmd": "play-midi", "note": "kick", "duration": "16n"}
-{"cmd": "bpm", "value": 96}
-```
-
-`warmup` starts the destination clock. After `stop`, `note-on` still sounds on the same stream.
-
-BPM writes while started apply on the next `start`. There is no live ramp.
-
-### shutdown
-
-```text
-{"cmd": "shutdown"}
-```
-
-## Events out
-
-The engine writes one JSON object per line on stdout.
-
-```text
-{"event": "ok", "cmd": "warmup"}
-{"event": "started", "latencyMs": 12, "position": "0:0:0", "frames": 0}
-{"event": "error", "cmd": "bpm", "message": "BPM 12 out of range 40-240"}
-```
-
-A UI playhead should treat `started.latencyMs` as a constant offset from the wall-clock moment the event arrived. A QTimer guess will drift. For PipeWire this is the negotiated stream latency, not a fixed 80 ms.
-
-## Schedule payloads
-
-Schedule payloads are drywet Sequence / Part / Loop JSON (generic events on the Transport), not a host app’s song document. Host apps that have their own documents translate into this JSON.
-
-```text
-{
-  "cmd": "start",
-  "bpm": 110,
-  "loop": true,
-  "schedule": {
-    "type": "sequence",
-    "subdivision": "8n",
-    "events": ["C3", null, "G3", "C3"],
-    "start": 0
-  }
-}
-```
-
-```text
-{
-  "cmd": "start",
-  "schedule": {
-    "type": "part",
-    "events": [
-      ["0:0:0", "C4"],
-      ["0:1:0", "E4"],
-      ["0:2:0", ["G4", "B4"]]
-    ]
-  }
-}
-```
-
-```text
-{
-  "cmd": "start",
-  "bpm": 80,
-  "schedule": {
-    "type": "loop",
-    "interval": "4n",
-    "note": "hat",
-    "duration": "32n"
-  }
-}
-```
-
-A list of schedule objects is also valid when a host needs drums plus a bassline:
-
-```text
-{
-  "cmd": "start",
-  "bpm": 96,
-  "schedule": [
-    {"type": "sequence", "instrument": "drum", "subdivision": "16n", "events": ["kick", null, "hat", null, "snare", null, "hat", null]},
-    {"type": "sequence", "instrument": "synth", "subdivision": "8n", "events": ["C2", null, "G2", "C2"]}
-  ]
-}
-```
-
-## Full session
-
-Host → engine:
-
-```text
-{"cmd": "warmup", "instrument": "sampler", "directory": "samples/piano"}
-{"cmd": "start", "bpm": 100, "loop": true, "schedule": {"type": "sequence", "subdivision": "4n", "events": ["C4", "E4", "G4", "B3"]}}
-{"cmd": "play-midi", "note": "C5", "duration": "8n"}
-{"cmd": "stop"}
-{"cmd": "shutdown"}
-```
-
-Engine → host:
-
-```text
-{"event": "ok", "cmd": "warmup"}
-{"event": "started", "latencyMs": 12, "position": "0:0:0"}
-{"event": "ok", "cmd": "play-midi"}
-{"event": "ok", "cmd": "stop"}
-```
-
-```text
-printf '%s\n' \
-  '{"cmd":"warmup","instrument":"synth"}' \
-  '{"cmd":"start","bpm":120,"loop":true}' \
-  '{"cmd":"play-midi","note":"C4","duration":"8n"}' \
-  '{"cmd":"stop"}' \
-  '{"cmd":"shutdown"}' \
-  | cargo run --quiet --bin drywet-engine -- --buffer
-```
-
-> [!NOTE]
-> **The engine is headless.** It does not implement circle-of-fifths widgets, song documents, or QML. Translate those in the host, then send Sequence / Part / Loop JSON.
+The native engine owns a `DeviceSink`, so it must remain running while audio is playing. For an offline or test harness, use `--buffer`; the engine then renders into memory without opening the default audio device.

@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 
 const SESSION: &[&str] = &[
     r#"{"cmd":"warmup","instrument":"drum"}"#,
-    r#"{"cmd":"start","bpm":100,"loop":true,"schedule":{"type":"loop","interval":"4n","note":"kick","duration":"16n"}}"#,
+    r#"{"cmd":"start","bpm":100,"loop":{"interval":"4n","note":"kick","duration":"16n"}}"#,
     r#"{"cmd":"play-midi","note":"hat","duration":"32n"}"#,
     r#"{"cmd":"stop"}"#,
     r#"{"cmd":"shutdown"}"#,

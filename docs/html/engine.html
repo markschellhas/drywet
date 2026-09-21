@@ -31,126 +31,23 @@
       <div class="nav-label">Hosts</div>
       <a class="item current" href="engine.html">Stdio engine</a>
       <a class="item" href="examples.html">Examples</a>
-      <a class="item" href="api.html">API cheat sheet</a>
+      <a class="item" href="api.html">API reference</a>
     </nav>
     <main id="content">
-      <p class="kicker">Host adapter</p>
-      <h1>Stdio engine</h1>
-<nav class="toc"><strong>On this page</strong><ol><li><a href="#spawn">Spawn</a></li><li><a href="#commands">Commands</a></li><li><a href="#events-out">Events out</a></li><li><a href="#schedule-payloads">Schedule payloads</a></li><li><a href="#full-session">Full session</a></li></ol></nav>
-<p class="lede">QML overlays and other UIs that cannot link Rust spawn <code>drywet-engine</code>. The process reads NDJSON on stdin and writes NDJSON on stdout. In-process apps import the <code>drywet</code> crate instead of spawning the engine.</p><p>The verbs match <a href="https://github.com/markschellhas/drywet-py">drywet-py</a> so an Omarchy widget can switch hosts without a new protocol.</p>
-<h2 id="spawn">Spawn</h2>
-<p>Spawn one persistent child. Sample cache lives across bars. <code>stop</code> keeps the process; <code>shutdown</code> exits.</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>cargo run --bin drywet-engine
-# or a vendored binary:
-./bin/drywet-engine
-# tests / CI:
-cargo run --bin drywet-engine -- --buffer</pre></div>
-<p>Default sink is PipeWire. <code>--buffer</code> uses <code>BufferSink</code>.</p>
-<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> std::io::Write;
-<span class="tok-kw">use</span> std::process::{Command, Stdio};
-
-<span class="tok-kw">let</span> <span class="tok-kw">mut</span> proc = Command::new(<span class="tok-str">&quot;drywet-engine&quot;</span>)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .spawn()?;
-
-{
-    <span class="tok-kw">let</span> stdin = proc.stdin.as_mut().unwrap();
-    writeln!(stdin, r#<span class="tok-str">&quot;{{&quot;</span>cmd<span class="tok-str">&quot;:&quot;</span>warmup<span class="tok-str">&quot;,&quot;</span>instrument<span class="tok-str">&quot;:&quot;</span>synth<span class="tok-str">&quot;}}&quot;</span>#)?;
-}</pre></div>
-<p>Each message is one JSON object on one line. Pretty-printing across lines will break the parser.</p>
+      <p class="kicker">JSON lines</p>
+      <h1>Engine protocol</h1>
+<nav class="toc"><strong>On this page</strong><ol><li><a href="#start-a-phrase">Start a phrase</a></li><li><a href="#commands">Commands</a></li><li><a href="#process-lifetime">Process lifetime</a></li></ol></nav>
+<p class="lede">Run the engine with native output:</p><div class="code"><div class="meta"><span>sh</span><button class="copy" type="button">Copy</button></div><pre>cargo run --bin drywet-engine</pre></div>
+<p>Use <code>--buffer</code> when a caller needs deterministic in-memory rendering instead of a system device. The process reads one JSON object per line and writes one JSON response per command.</p>
+<h2 id="start-a-phrase">Start a phrase</h2>
+<div class="code"><div class="meta"><span>json</span><button class="copy" type="button">Copy</button></div><pre>{&quot;cmd&quot;:&quot;start&quot;,&quot;bpm&quot;:120,&quot;loop&quot;:true,&quot;sequence&quot;:{&quot;events&quot;:[&quot;C4&quot;,&quot;E4&quot;,&quot;G4&quot;],&quot;subdivision&quot;:&quot;8n&quot;}}</pre></div>
+<p>The supported top-level schedule fields are <code>sequence</code>, <code>part</code>, and <code>loop</code>. A boolean <code>loop</code> enables transport looping; an object describes a repeating loop event:</p>
+<div class="code"><div class="meta"><span>json</span><button class="copy" type="button">Copy</button></div><pre>{&quot;cmd&quot;:&quot;start&quot;,&quot;bpm&quot;:90,&quot;loop&quot;:{&quot;interval&quot;:&quot;4n&quot;,&quot;note&quot;:&quot;kick&quot;,&quot;duration&quot;:&quot;16n&quot;}}</pre></div>
 <h2 id="commands">Commands</h2>
-<table><thead><tr><th>cmd</th><th>Tone analogue</th><th>Role</th></tr></thead><tbody><tr><td><code>warmup</code></td><td>Sampler load</td><td>Load Synth, Drum, or Sampler; open the sink</td></tr><tr><td><code>start</code></td><td><code>Transport.start</code></td><td>Start Transport (optional loop, bpm, schedule payload)</td></tr><tr><td><code>stop</code></td><td><code>Transport.stop</code></td><td>Stop Transport; destination keeps writing silence</td></tr><tr><td><code>pause</code></td><td><code>pause</code></td><td>Pause clock</td></tr><tr><td><code>resume</code></td><td><code>start</code> from pause</td><td>Resume clock</td></tr><tr><td><code>play-midi</code></td><td><code>triggerAttackRelease</code> now</td><td>One-shot live notes on the current instrument</td></tr><tr><td><code>note-on</code> / <code>note-off</code></td><td><code>triggerAttack</code> / <code>triggerRelease</code></td><td>Held voice; also accepted as <code>trigger_attack</code> / <code>trigger_release</code></td></tr><tr><td><code>bpm</code></td><td><code>Transport.bpm</code></td><td>Set tempo (applied on the next <code>start</code> if already running)</td></tr><tr><td><code>shutdown</code></td><td><code>dispose</code></td><td>Close sink and exit</td></tr></tbody></table>
-<h3 id="warmup">warmup</h3>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{&quot;cmd&quot;: &quot;warmup&quot;, &quot;instrument&quot;: &quot;synth&quot;}
-{&quot;cmd&quot;: &quot;warmup&quot;, &quot;instrument&quot;: &quot;drum&quot;}
-{&quot;cmd&quot;: &quot;warmup&quot;, &quot;instrument&quot;: &quot;sampler&quot;, &quot;directory&quot;: &quot;samples/&quot;}
-{&quot;cmd&quot;: &quot;warmup&quot;, &quot;instrument&quot;: &quot;sampler&quot;, &quot;urls&quot;: {&quot;C4&quot;: &quot;samples/C4.wav&quot;, &quot;G4&quot;: &quot;samples/G4.wav&quot;}}</pre></div>
-<h3 id="start-stop-pause-resume">start / stop / pause / resume</h3>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{&quot;cmd&quot;: &quot;start&quot;, &quot;bpm&quot;: 120, &quot;loop&quot;: true, &quot;loopStart&quot;: &quot;0:0:0&quot;, &quot;loopEnd&quot;: &quot;1:0:0&quot;}
-{&quot;cmd&quot;: &quot;pause&quot;}
-{&quot;cmd&quot;: &quot;resume&quot;}
-{&quot;cmd&quot;: &quot;stop&quot;}</pre></div>
-<h3 id="play-midi-note-on-note-off-and-bpm">play-midi, note-on / note-off, and bpm</h3>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{&quot;cmd&quot;: &quot;play-midi&quot;, &quot;note&quot;: &quot;C4&quot;, &quot;duration&quot;: &quot;8n&quot;}
-{&quot;cmd&quot;: &quot;note-on&quot;, &quot;note&quot;: &quot;C4&quot;}
-{&quot;cmd&quot;: &quot;note-off&quot;, &quot;note&quot;: &quot;C4&quot;}
-{&quot;cmd&quot;: &quot;play-midi&quot;, &quot;note&quot;: 60, &quot;duration&quot;: &quot;4n&quot;}
-{&quot;cmd&quot;: &quot;play-midi&quot;, &quot;note&quot;: &quot;kick&quot;, &quot;duration&quot;: &quot;16n&quot;}
-{&quot;cmd&quot;: &quot;bpm&quot;, &quot;value&quot;: 96}</pre></div>
-<p><code>warmup</code> starts the destination clock. After <code>stop</code>, <code>note-on</code> still sounds on the same stream.</p>
-<p>BPM writes while started apply on the next <code>start</code>. There is no live ramp.</p>
-<h3 id="shutdown">shutdown</h3>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{&quot;cmd&quot;: &quot;shutdown&quot;}</pre></div>
-<h2 id="events-out">Events out</h2>
-<p>The engine writes one JSON object per line on stdout.</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{&quot;event&quot;: &quot;ok&quot;, &quot;cmd&quot;: &quot;warmup&quot;}
-{&quot;event&quot;: &quot;started&quot;, &quot;latencyMs&quot;: 12, &quot;position&quot;: &quot;0:0:0&quot;, &quot;frames&quot;: 0}
-{&quot;event&quot;: &quot;error&quot;, &quot;cmd&quot;: &quot;bpm&quot;, &quot;message&quot;: &quot;BPM 12 out of range 40-240&quot;}</pre></div>
-<p>A UI playhead should treat <code>started.latencyMs</code> as a constant offset from the wall-clock moment the event arrived. A QTimer guess will drift. For PipeWire this is the negotiated stream latency, not a fixed 80 ms.</p>
-<h2 id="schedule-payloads">Schedule payloads</h2>
-<p>Schedule payloads are drywet Sequence / Part / Loop JSON (generic events on the Transport), not a host app’s song document. Host apps that have their own documents translate into this JSON.</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{
-  &quot;cmd&quot;: &quot;start&quot;,
-  &quot;bpm&quot;: 110,
-  &quot;loop&quot;: true,
-  &quot;schedule&quot;: {
-    &quot;type&quot;: &quot;sequence&quot;,
-    &quot;subdivision&quot;: &quot;8n&quot;,
-    &quot;events&quot;: [&quot;C3&quot;, null, &quot;G3&quot;, &quot;C3&quot;],
-    &quot;start&quot;: 0
-  }
-}</pre></div>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{
-  &quot;cmd&quot;: &quot;start&quot;,
-  &quot;schedule&quot;: {
-    &quot;type&quot;: &quot;part&quot;,
-    &quot;events&quot;: [
-      [&quot;0:0:0&quot;, &quot;C4&quot;],
-      [&quot;0:1:0&quot;, &quot;E4&quot;],
-      [&quot;0:2:0&quot;, [&quot;G4&quot;, &quot;B4&quot;]]
-    ]
-  }
-}</pre></div>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{
-  &quot;cmd&quot;: &quot;start&quot;,
-  &quot;bpm&quot;: 80,
-  &quot;schedule&quot;: {
-    &quot;type&quot;: &quot;loop&quot;,
-    &quot;interval&quot;: &quot;4n&quot;,
-    &quot;note&quot;: &quot;hat&quot;,
-    &quot;duration&quot;: &quot;32n&quot;
-  }
-}</pre></div>
-<p>A list of schedule objects is also valid when a host needs drums plus a bassline:</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{
-  &quot;cmd&quot;: &quot;start&quot;,
-  &quot;bpm&quot;: 96,
-  &quot;schedule&quot;: [
-    {&quot;type&quot;: &quot;sequence&quot;, &quot;instrument&quot;: &quot;drum&quot;, &quot;subdivision&quot;: &quot;16n&quot;, &quot;events&quot;: [&quot;kick&quot;, null, &quot;hat&quot;, null, &quot;snare&quot;, null, &quot;hat&quot;, null]},
-    {&quot;type&quot;: &quot;sequence&quot;, &quot;instrument&quot;: &quot;synth&quot;, &quot;subdivision&quot;: &quot;8n&quot;, &quot;events&quot;: [&quot;C2&quot;, null, &quot;G2&quot;, &quot;C2&quot;]}
-  ]
-}</pre></div>
-<h2 id="full-session">Full session</h2>
-<p>Host → engine:</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{&quot;cmd&quot;: &quot;warmup&quot;, &quot;instrument&quot;: &quot;sampler&quot;, &quot;directory&quot;: &quot;samples/piano&quot;}
-{&quot;cmd&quot;: &quot;start&quot;, &quot;bpm&quot;: 100, &quot;loop&quot;: true, &quot;schedule&quot;: {&quot;type&quot;: &quot;sequence&quot;, &quot;subdivision&quot;: &quot;4n&quot;, &quot;events&quot;: [&quot;C4&quot;, &quot;E4&quot;, &quot;G4&quot;, &quot;B3&quot;]}}
-{&quot;cmd&quot;: &quot;play-midi&quot;, &quot;note&quot;: &quot;C5&quot;, &quot;duration&quot;: &quot;8n&quot;}
-{&quot;cmd&quot;: &quot;stop&quot;}
-{&quot;cmd&quot;: &quot;shutdown&quot;}</pre></div>
-<p>Engine → host:</p>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{&quot;event&quot;: &quot;ok&quot;, &quot;cmd&quot;: &quot;warmup&quot;}
-{&quot;event&quot;: &quot;started&quot;, &quot;latencyMs&quot;: 12, &quot;position&quot;: &quot;0:0:0&quot;}
-{&quot;event&quot;: &quot;ok&quot;, &quot;cmd&quot;: &quot;play-midi&quot;}
-{&quot;event&quot;: &quot;ok&quot;, &quot;cmd&quot;: &quot;stop&quot;}</pre></div>
-<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>printf &#x27;%s\n&#x27; \
-  &#x27;{&quot;cmd&quot;:&quot;warmup&quot;,&quot;instrument&quot;:&quot;synth&quot;}&#x27; \
-  &#x27;{&quot;cmd&quot;:&quot;start&quot;,&quot;bpm&quot;:120,&quot;loop&quot;:true}&#x27; \
-  &#x27;{&quot;cmd&quot;:&quot;play-midi&quot;,&quot;note&quot;:&quot;C4&quot;,&quot;duration&quot;:&quot;8n&quot;}&#x27; \
-  &#x27;{&quot;cmd&quot;:&quot;stop&quot;}&#x27; \
-  &#x27;{&quot;cmd&quot;:&quot;shutdown&quot;}&#x27; \
-  | cargo run --quiet --bin drywet-engine -- --buffer</pre></div>
-<div class="callout note"><strong>The engine is headless.</strong><p>It does not implement circle-of-fifths widgets, song documents, or QML. Translate those in the host, then send Sequence / Part / Loop JSON.</p></div>
+<ul><li><code>warmup</code> initializes the engine.</li><li><code>start</code> schedules the supplied phrase and starts the transport.</li><li><code>stop</code>, <code>pause</code>, and <code>resume</code> control transport state.</li><li><code>bpm</code> changes tempo.</li><li><code>play-midi</code> triggers a MIDI note for a duration.</li><li><code>note-on</code>/<code>trigger_attack</code> and <code>note-off</code>/<code>trigger_release</code> control a voice.</li><li><code>shutdown</code> ends the process.</li></ul>
+<p>Responses are JSON objects such as <code>{&quot;ok&quot;:true}</code>. Starting transport also emits a <code>started</code> event with latency and position fields. Invalid commands or payloads return <code>{&quot;error&quot;:&quot;...&quot;}</code>.</p>
+<h2 id="process-lifetime">Process lifetime</h2>
+<p>The native engine owns a <code>DeviceSink</code>, so it must remain running while audio is playing. For an offline or test harness, use <code>--buffer</code>; the engine then renders into memory without opening the default audio device.</p>
       <footer class="page">
         <a href="output.html">← Output sinks</a><a href="examples.html">Examples →</a>
       </footer>

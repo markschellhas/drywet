@@ -1,177 +1,78 @@
 # Getting started
 
-<!-- kicker: Setup -->
-
-Create a Context, attach an instrument, schedule events on the Transport, then start the clock. The same steps apply to live widgets and offline tests.
+<!-- kicker: First steps -->
 
 ## Install
 
-### Library
-
-Add the crate to an app that already uses Cargo:
+Add the crate to `Cargo.toml`:
 
 ```toml
-# Cargo.toml
 [dependencies]
-drywet = { git = "https://github.com/markschellhas/drywet" }
+drywet = "0.1"
 ```
 
-Or clone this repo and use the path:
+On macOS, CPAL uses CoreAudio. On Linux and other platforms it uses the host's default CPAL backend. The examples use `DeviceSink`, so they play through the default device rather than a mock sink.
 
-```toml
-drywet = { path = "../drywet" }
-```
-
-`Context` defaults to `BufferSink` so tests never open PipeWire. For live output, pass a `PipeWireSink` or use the engine binary.
-
-### Engine binary
-
-Build and run the stdio host:
-
-```text
-cargo run --bin drywet-engine
-cargo run --bin drywet-engine -- --buffer   # BufferSink, no sound server
-```
-
-Install a local binary if a host should spawn it by name:
-
-```text
-cargo install --path . --bin drywet-engine
-```
-
-### Vendored widget (primary v1 path)
-
-Plugin hosts that clone git and skip a compiler should vendor a prebuilt `drywet-engine` next to the UI. The end user does not install drywet separately.
-
-```text
-my-widget/
-  ui/                    # QML, CLI, or other host files
-  samples/C4.wav
-  bin/drywet-engine      # vendored Linux binary
-```
-
-The host spawns `bin/drywet-engine` and speaks NDJSON. Sample banks stay in the consumer’s repo — drywet does not download sounds.
-
-> [!NOTE]
-> **Sample banks are not included.** Callers pass WAV paths. A widget that vendors the engine should also vendor its own `samples/`.
-
-## Play a synth note
-
-The built-in additive Synth can fill chord and key widgets when no sample bank is loaded. Live triggers omit `time` (`None`) and mix at the current write cursor.
+## Play one note
 
 ```rust
-use drywet::{Context, ContextConfig, PipeWireSink, Synth};
+use drywet::{Context, DeviceSink, Synth};
 
-let ctx = Context::new(ContextConfig {
-    sink: Some(Box::new(PipeWireSink::new()?)),
-    ..Default::default()
-});
-let synth = Synth::new(&ctx);
-
-ctx.transport().set_bpm(100)?;
-ctx.transport().start()?;
-synth.trigger_attack_release("C4", "2n", None)?; // now, on the write cursor
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let sink = DeviceSink::new()?;
+    let mut ctx = Context::with(sink.sample_rate(), sink.channels(), sink);
+    let mut synth = Synth::new(&ctx);
+    synth.trigger_attack_release(&ctx, "C4", "2n", None)?;
+    ctx.render("1m")?;
+    ctx.sink_mut().play()?;
+    ctx.sink().wait_until_end()?;
+    Ok(())
+}
 ```
 
-`start()` returns when the sink has accepted the first audio (immediately for `BufferSink`) and exposes `latency_ms` so a UI playhead can align.
+`Context::new()` is the convenient `BufferSink` context for offline work. `Context::with(rate, channels, sink)` is used when the sink determines the audio format, as with `DeviceSink`.
 
-## Schedule a sequence
+## Schedule a phrase
 
-A Sequence is silent until `Transport::start()`. The callback receives a sample-accurate `time` and should pass it into the instrument.
+Callbacks receive the scheduled time in seconds and an optional event value. Instrument methods take the context explicitly:
 
 ```rust
-use drywet::{Context, ContextConfig, PipeWireSink, Sequence, Synth};
+use drywet::{Context, DeviceSink, Sequence, Synth};
+use std::{cell::RefCell, rc::Rc};
 
-let ctx = Context::new(ContextConfig {
-    sink: Some(Box::new(PipeWireSink::new()?)),
-    ..Default::default()
-});
-let synth = Synth::new(&ctx);
-
-let seq = Sequence::new(
-    |time, note| synth.trigger_attack_release(note, "8n", Some(time)),
-    ["C4", "E4", "G4", "B4"],
-    "4n",
+let sink = DeviceSink::new()?;
+let mut ctx = Context::with(sink.sample_rate(), sink.channels(), sink);
+let synth = Rc::new(RefCell::new(Synth::new(&ctx)));
+let voice = Rc::clone(&synth);
+let mut seq = Sequence::new(
+    move |time, note| {
+        if let Some(note) = note {
+            let _ = voice.borrow_mut().trigger_attack_release(
+                &ctx, note, "16n", Some(time.into()),
+            );
+        }
+    },
+    vec!["C4", "D4", "E4", "G4"],
+    "8n",
 );
-seq.start(0)?;
-
-let t = ctx.transport();
-t.set_loop(true);
-t.set_loop_points("0:0:0", "1:0:0")?;
-t.set_bpm(120)?;
-t.start()?;
+ctx.transport().set_bpm(124.0)?;
+seq.start(&mut ctx.transport(), 0)?;
+ctx.render("2m")?;
+ctx.sink_mut().play()?;
+ctx.sink().wait_until_end()?;
 ```
 
-## Render without a sound server
+Use `ctx.transport().start()` only for a live, long-running transport. It returns the transport reference, not a `Result`; scheduled events then run as the process remains alive.
 
-CI and unit tests use `BufferSink` so they do not open PipeWire. That is also the `Context` default.
+## Offline rendering
 
 ```rust
-use drywet::{BufferSink, Context, ContextConfig, Synth};
-
-let sink = BufferSink::new();
-let ctx = Context::new(ContextConfig {
-    sink: Some(Box::new(sink)),
-    ..Default::default()
-});
-let synth = Synth::new(&ctx);
-synth.trigger_attack_release("A4", "4n", Some(0.0))?;
-
-let pcm = ctx.transport().render("1m")?;
-assert!(!pcm.is_empty());
+let mut ctx = Context::new();
+let pcm = ctx.render("4n")?;
 ```
 
-Or rely on the default sink:
+`render` advances the transport and fills a `BufferSink`. It does not open an audio device. Use `BufferSink::into_samples()` or `ctx.sink().samples()` to inspect the result.
 
-```rust
-let ctx = Context::new(ContextConfig::default());
-```
+## Engine mode
 
-## Mix a live note onto playback
-
-A chord widget, MIDI keyboard, or click can fire notes while a Sequence is running. Those notes mix onto the same stream. A second Transport, or a process per note, is not needed.
-
-```rust
-use drywet::{Context, ContextConfig, Drum, Loop, PipeWireSink, Synth};
-
-let ctx = Context::new(ContextConfig {
-    sink: Some(Box::new(PipeWireSink::new()?)),
-    ..Default::default()
-});
-let synth = Synth::new(&ctx);
-let drum = Drum::new(&ctx);
-
-let click = Loop::new(
-    |time, _| drum.trigger_attack_release("kick", "16n", Some(time)),
-    "4n",
-);
-click.start(0)?;
-ctx.transport().start()?;
-
-// UI key-down: mix immediately, no time argument
-synth.trigger_attack_release("E4", "8n", None)?;
-```
-
-## Spawn the engine from a UI
-
-Hosts that cannot link Rust spawn one persistent engine process and write NDJSON lines to stdin.
-
-```text
-{"cmd": "warmup", "instrument": "synth"}
-{"cmd": "start", "bpm": 120, "loop": true}
-{"cmd": "play-midi", "note": "C4", "duration": "8n"}
-{"cmd": "stop"}
-{"cmd": "shutdown"}
-```
-
-```text
-cargo run --bin drywet-engine
-```
-
-Full command list and schedule payloads: [Stdio engine](engine.md).
-
-## Next
-
-- [Context & Transport](context-transport.md) — playhead, loop, BPM, latency
-- [Musical time](time.md) — `"4n"`, dotted, triplets, bars:beats:sixteenths
-- [Examples](examples.md) — metronome, drums, sampler, CI
+Run `cargo run --bin drywet-engine` for native device output, or pass `--buffer` for a deterministic in-memory sink. The engine reads one JSON object per line; see [Engine protocol](engine.md).
