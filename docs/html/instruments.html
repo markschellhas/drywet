@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Instruments — drywet</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button class="menu-btn" type="button" aria-expanded="false">Menu</button>
+  <div class="shell">
+    <nav class="side" aria-label="Documentation">
+      <a class="brand" href="index.html">
+      <img class="logo" src="drywet.jpg" alt="" width="36" height="36" />
+      <span class="mark"><span class="dry">dry</span><span class="wet">wet</span></span>
+      <span class="ver">v1</span></a>
+      <p class="tagline">Rust library for scheduling and playing musical events on desktop.</p>
+      <div class="nav-label">Start</div>
+      <a class="item" href="index.html">Overview</a>
+      <a class="item" href="getting-started.html">Getting started</a>
+      <div class="nav-label">Runtime</div>
+      <a class="item" href="context-transport.html">Context &amp; Transport</a>
+      <a class="item" href="time.html">Musical time</a>
+      <a class="item current" href="instruments.html">Instruments</a>
+      <a class="item" href="scheduling.html">Sequence, Part, Loop</a>
+      <a class="item" href="output.html">Output sinks</a>
+      <div class="nav-label">Hosts</div>
+      <a class="item" href="engine.html">Stdio engine</a>
+      <a class="item" href="examples.html">Examples</a>
+      <a class="item" href="api.html">API cheat sheet</a>
+    </nav>
+    <main id="content">
+      <p class="kicker">Voices</p>
+      <h1>Instruments</h1>
+<nav class="toc"><strong>On this page</strong><ol><li><a href="#shared-trigger-api">Shared trigger API</a></li><li><a href="#synth">Synth</a></li><li><a href="#sampler">Sampler</a></li><li><a href="#drum">Drum</a></li><li><a href="#live-vs-scheduled">Live vs scheduled</a></li></ol></nav>
+<p class="lede">v1 includes a Sampler that maps WAV files to notes, a small additive Synth, and kick / snare / hi-hat transients. Velocity is ignored. There is no SoundFont dependency.</p><h2 id="shared-trigger-api">Shared trigger API</h2>
+<p>Tone names in snake_case. <code>trigger_attack</code> starts a live voice at the write cursor (or <code>time</code>) and keeps sounding until <code>trigger_release</code> / <code>release_all</code>. Release is a short envelope, not a hard cut. <code>trigger_attack_release</code> is the scheduled one-shot. Duration of a held note is the hold, not a prerendered length.</p>
+<table><thead><tr><th>Method</th><th>Tone analogue</th></tr></thead><tbody><tr><td><code>trigger_attack(note, time)</code></td><td><code>triggerAttack</code></td></tr><tr><td><code>trigger_release(note, time)</code></td><td><code>triggerRelease</code></td></tr><tr><td><code>trigger_attack_release(note, duration, time)</code></td><td><code>triggerAttackRelease</code></td></tr></tbody></table>
+<p><code>time</code> is <code>Option&lt;impl Into&lt;Time&gt;&gt;</code>. <code>None</code> means now (the write cursor).</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>synth.trigger_attack(<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-kw">None</span>)?;                       <span class="tok-cm">// now</span>
+synth.trigger_release(<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-kw">Some</span>(<span class="tok-str">&quot;+4n&quot;</span>))?;
+synth.trigger_attack_release(<span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">Some</span>(time))?;   <span class="tok-cm">// scheduled</span></pre></div>
+<p>Instruments do not <code>connect</code> anywhere. The Context sink is the destination.</p>
+<h2 id="synth">Synth</h2>
+<p>A small additive voice (harmonics plus attack/release) for cases where no sample bank is loaded. It covers the Tone Synth role, not OmniOscillator internals.</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, PipeWireSink, Synth};
+
+<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
+    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
+    ..<span class="tok-kw">Default</span>::default()
+});
+<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
+ctx.transport().start()?;
+
+<span class="tok-kw">fn</span> play_chord(synth: &amp;Synth, notes: &amp;[&amp;str], duration: &amp;str) -&gt; drywet::Result&lt;()&gt; {
+    <span class="tok-kw">for</span> note <span class="tok-kw">in</span> notes {
+        synth.trigger_attack_release(*note, duration, <span class="tok-kw">None</span>)?;
+    }
+    <span class="tok-kw">Ok</span>(())
+}
+
+play_chord(&amp;synth, &amp;[<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>, <span class="tok-str">&quot;B4&quot;</span>], <span class="tok-str">&quot;2n&quot;</span>)?;</pre></div>
+<h2 id="sampler">Sampler</h2>
+<p>Follows Tone Sampler: note or MIDI → WAV map, pitch-shift missing pitches, polyphonic <code>trigger_attack_release</code>. WAV only in v1. Files are resampled on load if their rate differs from the Context.</p>
+<h3 id="map-files-by-note-name">Map files by note name</h3>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> piano = Sampler::new(
+    [
+        (<span class="tok-str">&quot;C4&quot;</span>.into(), <span class="tok-str">&quot;samples/C4.wav&quot;</span>.into()),
+        (<span class="tok-str">&quot;G4&quot;</span>.into(), <span class="tok-str">&quot;samples/G4.wav&quot;</span>.into()),
+        (<span class="tok-str">&quot;72&quot;</span>.into(), <span class="tok-str">&quot;samples/C5.wav&quot;</span>.into()), <span class="tok-cm">// MIDI integer keys are fine</span>
+    ],
+    &amp;ctx,
+)?;
+
+piano.trigger_attack_release(<span class="tok-str">&quot;D4&quot;</span>, <span class="tok-str">&quot;4n&quot;</span>, <span class="tok-kw">Some</span>(time))?;
+<span class="tok-cm">// D4 has no file → nearest sample is pitch-shifted (Tone urls + automatic repitch)</span></pre></div>
+<h3 id="load-a-folder-of-c4-wav-style-files">Load a folder of <code>C4.wav</code>-style files</h3>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> piano = Sampler::from_directory(<span class="tok-str">&quot;samples/&quot;</span>, &amp;ctx)?;
+piano.add(<span class="tok-str">&quot;F#3&quot;</span>, <span class="tok-str">&quot;samples/extra/Fs3.wav&quot;</span>)?; <span class="tok-cm">// Tone Sampler.add</span></pre></div>
+<h3 id="sustain-loops-and-release">Sustain loops and release</h3>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">let</span> organ = Sampler::from_directory(<span class="tok-str">&quot;organ/&quot;</span>, &amp;ctx)?.with_loop(<span class="tok-kw">true</span>);
+organ.trigger_attack(<span class="tok-str">&quot;C3&quot;</span>, <span class="tok-kw">None</span>)?;
+<span class="tok-cm">// ... later, all keys up:</span>
+organ.release_all(<span class="tok-kw">None</span>)?;
+organ.release_all(<span class="tok-kw">Some</span>(time))?; <span class="tok-cm">// scheduled, Tone releaseAll</span></pre></div>
+<p>Polyphony is capped and documented. Exceeding the cap returns <code>Err</code> rather than hanging the sink. Optional looping is for organ-like sustains, not clip warping.</p>
+<div class="callout note"><strong>Sample banks stay with the caller.</strong><p>Keep WAVs in the consumer repo. A widget that vendors <code>drywet-engine</code> should also vendor its own <code>samples/</code>.</p></div>
+<h2 id="drum">Drum</h2>
+<p>Kick, snare, and hi-hat transients for beat widgets (the Membrane/Noise role, not those Tone classes). Patterns are on/off steps; v1 has no velocity. Trigger by voice name so a fourth lane does not require a new class. Unknown names return <code>Err</code>.</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, Drum, PipeWireSink, Sequence};
+
+<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
+    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
+    ..<span class="tok-kw">Default</span>::default()
+});
+<span class="tok-kw">let</span> drum = Drum::new(&amp;ctx);
+
+<span class="tok-kw">let</span> kick  = [<span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>];
+<span class="tok-kw">let</span> snare = [<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>];
+<span class="tok-kw">let</span> hat   = [<span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>];
+
+<span class="tok-kw">let</span> seq = Sequence::new(
+    |time, index| {
+        <span class="tok-kw">let</span> i = index <span class="tok-kw">as</span> usize;
+        <span class="tok-kw">if</span> kick[i]  == <span class="tok-num">1</span> { drum.trigger_attack_release(<span class="tok-str">&quot;kick&quot;</span>, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time))?; }
+        <span class="tok-kw">if</span> snare[i] == <span class="tok-num">1</span> { drum.trigger_attack_release(<span class="tok-str">&quot;snare&quot;</span>, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time))?; }
+        <span class="tok-kw">if</span> hat[i]   == <span class="tok-num">1</span> { drum.trigger_attack_release(<span class="tok-str">&quot;hat&quot;</span>, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time))?; }
+        <span class="tok-kw">Ok</span>(())
+    },
+    <span class="tok-num">0..16</span>,
+    <span class="tok-str">&quot;16n&quot;</span>,
+);
+seq.start(<span class="tok-num">0</span>)?;
+ctx.transport().set_bpm(<span class="tok-num">96</span>)?;
+ctx.transport().set_loop(<span class="tok-kw">true</span>);
+ctx.transport().set_loop_points(<span class="tok-num">0</span>, <span class="tok-str">&quot;1m&quot;</span>)?;
+ctx.transport().start()?;</pre></div>
+<p><code>Drum::trigger(&quot;kick&quot;, time)</code> is the short form. At 3/4 or 6/8, use 12 steps. See <a href="time.md#beat-grids-from-time-signature">beat grids</a>.</p>
+<h2 id="live-vs-scheduled">Live vs scheduled</h2>
+<table><thead><tr><th>Call</th><th>When it sounds</th></tr></thead><tbody><tr><td><code>trigger_attack(&quot;C4&quot;, None)</code> then <code>trigger_release(&quot;C4&quot;, None)</code></td><td>Key down / hold / key up on the live voice mixer</td></tr><tr><td><code>trigger_attack_release(&quot;C4&quot;, &quot;8n&quot;, None)</code></td><td>Immediately, mixed at the write cursor (one-shot)</td></tr><tr><td><code>trigger_attack_release(&quot;C4&quot;, &quot;8n&quot;, Some(time))</code></td><td>At the sample-accurate event time from a callback</td></tr></tbody></table>
+<p>Both mix onto the same playing stream. There is no <code>Instrument.sync()</code> / <code>unsync()</code> in v1: Sequence / Part / Loop are already on the Transport, and live notes mix immediately.</p>
+      <footer class="page">
+        <a href="time.html">← Musical time</a><a href="scheduling.html">Sequence, Part, Loop →</a>
+      </footer>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

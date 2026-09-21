@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Examples — drywet</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <button class="menu-btn" type="button" aria-expanded="false">Menu</button>
+  <div class="shell">
+    <nav class="side" aria-label="Documentation">
+      <a class="brand" href="index.html">
+      <img class="logo" src="drywet.jpg" alt="" width="36" height="36" />
+      <span class="mark"><span class="dry">dry</span><span class="wet">wet</span></span>
+      <span class="ver">v1</span></a>
+      <p class="tagline">Rust library for scheduling and playing musical events on desktop.</p>
+      <div class="nav-label">Start</div>
+      <a class="item" href="index.html">Overview</a>
+      <a class="item" href="getting-started.html">Getting started</a>
+      <div class="nav-label">Runtime</div>
+      <a class="item" href="context-transport.html">Context &amp; Transport</a>
+      <a class="item" href="time.html">Musical time</a>
+      <a class="item" href="instruments.html">Instruments</a>
+      <a class="item" href="scheduling.html">Sequence, Part, Loop</a>
+      <a class="item" href="output.html">Output sinks</a>
+      <div class="nav-label">Hosts</div>
+      <a class="item" href="engine.html">Stdio engine</a>
+      <a class="item current" href="examples.html">Examples</a>
+      <a class="item" href="api.html">API cheat sheet</a>
+    </nav>
+    <main id="content">
+      <p class="kicker">Examples</p>
+      <h1>Examples</h1>
+<nav class="toc"><strong>On this page</strong><ol><li><a href="#practice-metronome">Practice metronome</a></li><li><a href="#chord-widget">Chord widget</a></li><li><a href="#drum-machine">Drum machine</a></li><li><a href="#6-8-grid">6/8 grid</a></li><li><a href="#bassline-sequence">Bassline Sequence</a></li><li><a href="#sampler-piano">Sampler piano</a></li><li><a href="#live-notes-over-a-loop">Live notes over a loop</a></li><li><a href="#offline-ci-test">Offline CI test</a></li><li><a href="#engine-from-a-host">Engine from a host</a></li></ol></nav>
+<p class="lede">Sketches you can copy for common widgets: metronome, chords, drums, sampler piano, live notes over a loop, and an offline CI render.</p><p>Runnable copies live in <a href="https://github.com/markschellhas/drywet/tree/master/examples"><code>examples/</code></a>. After the crate builds:</p>
+<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>cargo run --example metronome
+cargo run --example chords
+cargo run --example drums
+cargo run --example sixeight
+cargo run --example bassline
+cargo run --example piano
+cargo run --example jam
+cargo run --example render</pre></div>
+<p>Live examples open PipeWire. Offline <code>render</code> uses <code>BufferSink</code> and writes <code>phrase.wav</code>. Engine protocol:</p>
+<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>cargo run --example engine_session
+# or pipe NDJSON yourself:
+printf &#x27;%s\n&#x27; &#x27;{&quot;cmd&quot;:&quot;warmup&quot;,&quot;instrument&quot;:&quot;drum&quot;}&#x27; ... \
+  | cargo run --bin drywet-engine</pre></div>
+<h2 id="practice-metronome">Practice metronome</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, Drum, Loop, PipeWireSink};
+
+<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
+    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
+    ..<span class="tok-kw">Default</span>::default()
+});
+<span class="tok-kw">let</span> drum = Drum::new(&amp;ctx);
+
+<span class="tok-kw">let</span> click = Loop::new(
+    |time, _| {
+        <span class="tok-kw">let</span> voice = <span class="tok-kw">if</span> ctx.transport().position().ends_with(<span class="tok-str">&quot;:0:0&quot;</span>) {
+            <span class="tok-str">&quot;kick&quot;</span>
+        } <span class="tok-kw">else</span> {
+            <span class="tok-str">&quot;hat&quot;</span>
+        };
+        drum.trigger_attack_release(voice, <span class="tok-str">&quot;32n&quot;</span>, <span class="tok-kw">Some</span>(time))
+    },
+    <span class="tok-str">&quot;4n&quot;</span>,
+);
+click.start(<span class="tok-num">0</span>)?;
+ctx.transport().set_bpm(<span class="tok-num">72</span>)?;
+ctx.transport().start()?;</pre></div>
+<p>Run: <code>cargo run --example metronome</code></p>
+<h2 id="chord-widget">Chord widget</h2>
+<p>This example uses the built-in Synth. Each button mixes a triad onto the current stream.</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, PipeWireSink, Synth};
+
+<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
+    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
+    ..<span class="tok-kw">Default</span>::default()
+});
+<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
+ctx.transport().start()?;
+
+<span class="tok-kw">fn</span> on_pad(synth: &amp;Synth, name: &amp;str) -&gt; drywet::Result&lt;()&gt; {
+    <span class="tok-kw">let</span> notes: &amp;[&amp;str] = <span class="tok-kw">match</span> name {
+        <span class="tok-str">&quot;C&quot;</span> =&gt; &amp;[<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>],
+        <span class="tok-str">&quot;Am&quot;</span> =&gt; &amp;[<span class="tok-str">&quot;A3&quot;</span>, <span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>],
+        <span class="tok-str">&quot;F&quot;</span> =&gt; &amp;[<span class="tok-str">&quot;F3&quot;</span>, <span class="tok-str">&quot;A3&quot;</span>, <span class="tok-str">&quot;C4&quot;</span>],
+        <span class="tok-str">&quot;G&quot;</span> =&gt; &amp;[<span class="tok-str">&quot;G3&quot;</span>, <span class="tok-str">&quot;B3&quot;</span>, <span class="tok-str">&quot;D4&quot;</span>],
+        _ =&gt; <span class="tok-kw">return</span> <span class="tok-kw">Ok</span>(()),
+    };
+    <span class="tok-kw">for</span> note <span class="tok-kw">in</span> notes {
+        synth.trigger_attack_release(*note, <span class="tok-str">&quot;2n&quot;</span>, <span class="tok-kw">None</span>)?;
+    }
+    <span class="tok-kw">Ok</span>(())
+}
+
+on_pad(&amp;synth, <span class="tok-str">&quot;C&quot;</span>)?;</pre></div>
+<p>Run: <code>cargo run --example chords</code></p>
+<h2 id="drum-machine">Drum machine</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, Drum, PipeWireSink, Sequence};
+<span class="tok-kw">use</span> std::collections::HashMap;
+
+<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
+    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
+    ..<span class="tok-kw">Default</span>::default()
+});
+<span class="tok-kw">let</span> drum = Drum::new(&amp;ctx);
+
+<span class="tok-kw">let</span> pattern = HashMap::from([
+    (<span class="tok-str">&quot;kick&quot;</span>,  [<span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>]),
+    (<span class="tok-str">&quot;snare&quot;</span>, [<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>]),
+    (<span class="tok-str">&quot;hat&quot;</span>,   [<span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>, <span class="tok-num">1</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>]),
+]);
+
+<span class="tok-kw">let</span> seq = Sequence::new(
+    |time, i| {
+        <span class="tok-kw">for</span> (voice, hits) <span class="tok-kw">in</span> &amp;pattern {
+            <span class="tok-kw">if</span> hits[i <span class="tok-kw">as</span> usize] == <span class="tok-num">1</span> {
+                drum.trigger_attack_release(*voice, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time))?;
+            }
+        }
+        <span class="tok-kw">Ok</span>(())
+    },
+    <span class="tok-num">0..16</span>,
+    <span class="tok-str">&quot;16n&quot;</span>,
+);
+seq.start(<span class="tok-num">0</span>)?;
+ctx.transport().set_bpm(<span class="tok-num">108</span>)?;
+ctx.transport().set_loop(<span class="tok-kw">true</span>);
+ctx.transport().set_loop_points(<span class="tok-num">0</span>, <span class="tok-str">&quot;1m&quot;</span>)?;
+ctx.transport().start()?;</pre></div>
+<p>Run: <code>cargo run --example drums</code></p>
+<h2 id="6-8-grid">6/8 grid</h2>
+<p>Twelve sixteenth steps: <code>numerator * 16 / denominator</code>.</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre>ctx.transport().set_time_signature(<span class="tok-num">6</span>, <span class="tok-num">8</span>)?;
+<span class="tok-kw">let</span> (num, den) = ctx.transport().time_signature();
+<span class="tok-kw">let</span> steps = num * <span class="tok-num">16</span> / den; <span class="tok-cm">// 12</span>
+<span class="tok-kw">let</span> kick = [<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>];
+
+<span class="tok-kw">let</span> seq = Sequence::new(
+    |time, i| {
+        <span class="tok-kw">if</span> kick[i <span class="tok-kw">as</span> usize] == <span class="tok-num">1</span> {
+            drum.trigger_attack_release(<span class="tok-str">&quot;kick&quot;</span>, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time))?;
+        }
+        <span class="tok-kw">Ok</span>(())
+    },
+    <span class="tok-num">0..</span>steps,
+    <span class="tok-str">&quot;16n&quot;</span>,
+);
+seq.start(<span class="tok-num">0</span>)?;</pre></div>
+<p>Run: <code>cargo run --example sixeight</code></p>
+<h2 id="bassline-sequence">Bassline Sequence</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, Event::*, PipeWireSink, Sequence, Synth};
+
+<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
+    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
+    ..<span class="tok-kw">Default</span>::default()
+});
+<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
+
+<span class="tok-kw">let</span> seq = Sequence::new(
+    |time, note| synth.trigger_attack_release(note, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time)),
+    [
+        Note(<span class="tok-str">&quot;C2&quot;</span>),
+        Rest,
+        Group(vec![Note(<span class="tok-str">&quot;C2&quot;</span>), Note(<span class="tok-str">&quot;G2&quot;</span>)]),
+        Note(<span class="tok-str">&quot;A#1&quot;</span>),
+        Note(<span class="tok-str">&quot;C2&quot;</span>),
+        Rest,
+        Note(<span class="tok-str">&quot;D2&quot;</span>),
+        Note(<span class="tok-str">&quot;G2&quot;</span>),
+    ],
+    <span class="tok-str">&quot;8n&quot;</span>,
+);
+seq.start(<span class="tok-num">0</span>)?;
+ctx.transport().set_bpm(<span class="tok-num">124</span>)?;
+ctx.transport().set_loop(<span class="tok-kw">true</span>);
+ctx.transport().set_loop_points(<span class="tok-str">&quot;0:0:0&quot;</span>, <span class="tok-str">&quot;1:0:0&quot;</span>)?;
+ctx.transport().start()?;</pre></div>
+<p>Run: <code>cargo run --example bassline</code></p>
+<h2 id="sampler-piano">Sampler piano</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, Part, PipeWireSink, Sampler};
+
+<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
+    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
+    ..<span class="tok-kw">Default</span>::default()
+});
+<span class="tok-kw">let</span> piano = Sampler::from_directory(<span class="tok-str">&quot;samples/piano&quot;</span>, &amp;ctx)?;
+
+<span class="tok-kw">let</span> part = Part::new(
+    |time, note| piano.trigger_attack_release(note, <span class="tok-str">&quot;4n&quot;</span>, <span class="tok-kw">Some</span>(time)),
+    [
+        (<span class="tok-str">&quot;0:0:0&quot;</span>, <span class="tok-str">&quot;C4&quot;</span>),
+        (<span class="tok-str">&quot;0:1:0&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>),
+        (<span class="tok-str">&quot;0:2:0&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>),
+        (<span class="tok-str">&quot;0:3:0&quot;</span>, <span class="tok-str">&quot;B4&quot;</span>),
+        (<span class="tok-str">&quot;1:0:0&quot;</span>, <span class="tok-str">&quot;C5&quot;</span>),
+    ],
+);
+part.start(<span class="tok-num">0</span>)?;
+ctx.transport().set_bpm(<span class="tok-num">90</span>)?;
+ctx.transport().start()?;
+<span class="tok-cm">// missing pitches (D4, F4, ...) are pitch-shifted from the nearest WAV</span></pre></div>
+<p>Run: <code>cargo run --example piano</code> (needs <code>samples/piano/*.wav</code> next to the process)</p>
+<h2 id="live-notes-over-a-loop">Live notes over a loop</h2>
+<p>The Sequence keeps running. UI keys mix at the write cursor while playback continues.</p>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, Drum, Event::*, PipeWireSink, Sequence, Synth};
+
+<span class="tok-kw">let</span> ctx = Context::new(ContextConfig {
+    sink: <span class="tok-kw">Some</span>(<span class="tok-kw">Box</span>::new(PipeWireSink::new()?)),
+    ..<span class="tok-kw">Default</span>::default()
+});
+<span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
+<span class="tok-kw">let</span> drum = Drum::new(&amp;ctx);
+
+<span class="tok-kw">let</span> groove = Sequence::new(
+    |time, voice| drum.trigger_attack_release(voice, <span class="tok-str">&quot;16n&quot;</span>, <span class="tok-kw">Some</span>(time)),
+    [
+        Note(<span class="tok-str">&quot;kick&quot;</span>),
+        Rest,
+        Note(<span class="tok-str">&quot;hat&quot;</span>),
+        Rest,
+        Note(<span class="tok-str">&quot;snare&quot;</span>),
+        Rest,
+        Note(<span class="tok-str">&quot;hat&quot;</span>),
+        Rest,
+    ],
+    <span class="tok-str">&quot;8n&quot;</span>,
+);
+groove.start(<span class="tok-num">0</span>)?;
+ctx.transport().set_loop(<span class="tok-kw">true</span>);
+ctx.transport().set_loop_points(<span class="tok-num">0</span>, <span class="tok-str">&quot;1m&quot;</span>)?;
+ctx.transport().start()?;
+
+<span class="tok-kw">fn</span> on_key(synth: &amp;Synth, note: &amp;str) -&gt; drywet::Result&lt;()&gt; {
+    synth.trigger_attack_release(note, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">None</span>) <span class="tok-cm">// no time → now</span>
+}
+
+on_key(&amp;synth, <span class="tok-str">&quot;A4&quot;</span>)?;</pre></div>
+<p>Run: <code>cargo run --example jam</code></p>
+<h2 id="offline-ci-test">Offline CI test</h2>
+<div class="code"><div class="meta"><span>Rust</span><button class="copy" type="button">Copy</button></div><pre><span class="tok-kw">use</span> drywet::{Context, ContextConfig, Sequence, Synth};
+
+#[test]
+<span class="tok-kw">fn</span> quarter_notes_fill_a_bar() {
+    <span class="tok-kw">let</span> ctx = Context::new(ContextConfig::default());
+    <span class="tok-kw">let</span> synth = Synth::new(&amp;ctx);
+    <span class="tok-kw">let</span> seq = Sequence::new(
+        |time, note| synth.trigger_attack_release(note, <span class="tok-str">&quot;8n&quot;</span>, <span class="tok-kw">Some</span>(time)),
+        [<span class="tok-str">&quot;C4&quot;</span>, <span class="tok-str">&quot;E4&quot;</span>, <span class="tok-str">&quot;G4&quot;</span>, <span class="tok-str">&quot;C5&quot;</span>],
+        <span class="tok-str">&quot;4n&quot;</span>,
+    );
+    seq.start(<span class="tok-num">0</span>).unwrap();
+    ctx.transport().set_bpm(<span class="tok-num">120</span>).unwrap();
+    <span class="tok-kw">let</span> pcm = ctx.transport().render(<span class="tok-str">&quot;1m&quot;</span>).unwrap();
+    <span class="tok-kw">let</span> expected = (ctx.to_seconds(<span class="tok-str">&quot;1m&quot;</span>).unwrap() * ctx.sample_rate() <span class="tok-kw">as</span> f64) <span class="tok-kw">as</span> usize;
+    assert_eq!(pcm.len(), expected);
+    assert!(pcm.iter().any(|s| s.abs() &gt; <span class="tok-num">0.0</span>));
+}</pre></div>
+<p>Run the sketch: <code>cargo run --example render</code> Run the suite: <code>cargo test</code></p>
+<h2 id="engine-from-a-host">Engine from a host</h2>
+<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>{&quot;cmd&quot;: &quot;warmup&quot;, &quot;instrument&quot;: &quot;drum&quot;}
+{&quot;cmd&quot;: &quot;start&quot;, &quot;bpm&quot;: 100, &quot;loop&quot;: true, &quot;schedule&quot;: {&quot;type&quot;: &quot;loop&quot;, &quot;interval&quot;: &quot;4n&quot;, &quot;note&quot;: &quot;kick&quot;, &quot;duration&quot;: &quot;16n&quot;}}
+{&quot;cmd&quot;: &quot;play-midi&quot;, &quot;note&quot;: &quot;hat&quot;, &quot;duration&quot;: &quot;32n&quot;}
+{&quot;cmd&quot;: &quot;stop&quot;}
+{&quot;cmd&quot;: &quot;shutdown&quot;}</pre></div>
+<div class="code"><div class="meta"><span>shell</span><button class="copy" type="button">Copy</button></div><pre>cargo run --example engine_session</pre></div>
+<p>More protocol detail: <a href="engine.html">Stdio engine</a>.</p>
+      <footer class="page">
+        <a href="engine.html">← Stdio engine</a><a href="api.html">API cheat sheet →</a>
+      </footer>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
