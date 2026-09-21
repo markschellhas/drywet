@@ -119,7 +119,7 @@ ctx.transport().set_bpm(<span class="tok-num">96</span>)?;
 ctx.transport().set_loop(<span class="tok-kw">true</span>);
 ctx.transport().set_loop_points(<span class="tok-num">0</span>, <span class="tok-str">&quot;1m&quot;</span>)?;
 ctx.transport().start()?;</pre></div>
-<p><code>Drum::trigger(&quot;kick&quot;, time)</code> is the short form. At 3/4 or 6/8, use 12 steps. See <a href="time.md#beat-grids-from-time-signature">beat grids</a>.</p>
+<p><code>Drum::trigger(&quot;kick&quot;, time)</code> is the short form. At 3/4 or 6/8, use 12 steps. See <a href="time.html#beat-grids-from-time-signature">beat grids</a>.</p>
 <h2 id="live-vs-scheduled">Live vs scheduled</h2>
 <table><thead><tr><th>Call</th><th>When it sounds</th></tr></thead><tbody><tr><td><code>trigger_attack(&quot;C4&quot;, None)</code> then <code>trigger_release(&quot;C4&quot;, None)</code></td><td>Key down / hold / key up on the live voice mixer</td></tr><tr><td><code>trigger_attack_release(&quot;C4&quot;, &quot;8n&quot;, None)</code></td><td>Immediately, mixed at the write cursor (one-shot)</td></tr><tr><td><code>trigger_attack_release(&quot;C4&quot;, &quot;8n&quot;, Some(time))</code></td><td>At the sample-accurate event time from a callback</td></tr></tbody></table>
 <p>Both mix onto the same playing stream. There is no <code>Instrument.sync()</code> / <code>unsync()</code> in v1: Sequence / Part / Loop are already on the Transport, and live notes mix immediately.</p>

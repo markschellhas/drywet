@@ -154,11 +154,11 @@ def md_href(href: str) -> str:
         if href.startswith("../"):
             return href.replace("../", "../../")
         return href
-    if href.endswith(".md"):
-        path, frag = href, ""
-        if "#" in href:
-            path, frag = href.split("#", 1)
-            frag = "#" + frag
+    path, frag = href, ""
+    if "#" in href:
+        path, frag = href.split("#", 1)
+        frag = "#" + frag
+    if path.endswith(".md"):
         name = path.rsplit("/", 1)[-1].replace(".md", ".html")
         return name + frag
     if href.startswith("html/"):
@@ -439,6 +439,7 @@ def wrap_cards(inner: str) -> str:
                 rest = re.sub(r"(<p><strong>.*?</p>\s*)+", "", following, count=1, flags=re.S)
                 grid = ['<div class="grid-2">']
                 for title, text in cards:
+                    title = title.rstrip(".")
                     grid.append(
                         '<article class="card">'
                         f"<h3>{title}</h3>"
