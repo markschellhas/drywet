@@ -156,6 +156,7 @@ Events out: `started` (`latencyMs`, position), `ok`, `error`. Schedule payloads 
 ## Related Docs
 
 - This file: `docs/prds/prd-drywet.md`
+- GUI hosts: `docs/gui.md` (in-process Ply / egui, Omarchy QML + `drywet-engine` NDJSON)
 - Heritage maps: [drywet-py `.features/`](https://github.com/markschellhas/drywet-py/tree/master/.features) (`context`, `transport`, `time`, `instruments`, `events`, `sinks`, `engine`)
 - Heritage PRD: [drywet-py `docs/prds/prd-drywet.md`](https://github.com/markschellhas/drywet-py/blob/master/docs/prds/prd-drywet.md)
 - Omarchy plugin shape: QML `bar-widget` / `menu` + child process (see Omarchy shell plugins manual)

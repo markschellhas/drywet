@@ -1,4 +1,8 @@
 //! NDJSON stdio host: one JSON command per stdin line, one JSON reply per stdout line.
+//!
+//! Omarchy QML (and any other process host) spawns `drywet-engine` and writes
+//! the verbs in this module. In-process GUIs skip this adapter and call
+//! [`crate::Context`] directly. Worked examples: `docs/gui.md`.
 
 use std::cell::RefCell;
 use std::io::{BufRead, Write};
