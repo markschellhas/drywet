@@ -1,16 +1,23 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use drywet::instrument::InstrumentError;
 use drywet::{Context, Sampler};
+
+static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
 fn unique_dir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("drywet-sampler-{}-{}", std::process::id(), nanos));
+    let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "drywet-sampler-{}-{nanos}-{sequence}",
+        std::process::id()
+    ));
     fs::create_dir_all(&dir).unwrap();
     dir
 }

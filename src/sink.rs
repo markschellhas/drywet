@@ -1,5 +1,6 @@
 use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 
+pub use crate::sink_device::{DeviceSink, DeviceSinkError};
 pub use crate::sink_pipewire::{
     latency_ms_from_quantum, MockStream, PipeWireSink, StreamBackend, DEFAULT_QUANTUM_FRAMES,
 };

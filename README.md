@@ -4,21 +4,35 @@
 
 A musician-facing runtime for desktop audio apps: one Transport, Tone-style time strings, Sampler / Synth / Drum, Sequence / Part / Loop, and live notes mixed onto a single playing stream.
 
-Tone.js feels complete because it is two layers — a musician API and a hard audio engine (the browser). drywet keeps the first layer and implements the second in Rust on PipeWire.
+Tone.js feels complete because it is two layers — a musician API and a hard audio engine (the browser). drywet keeps the first layer and implements the second in Rust with native device output through CPAL.
 
 ```rust
-use drywet::{Context, ContextConfig, Sequence, Synth};
+use std::cell::RefCell;
+use std::rc::Rc;
+use drywet::{Context, DeviceSink, Sequence, Synth};
 
-let ctx = Context::new(ContextConfig::default());
-let synth = Synth::new(&ctx);
-let seq = Sequence::new(
-    |time, note| synth.trigger_attack_release(note, "8n", Some(time)),
+let sink = DeviceSink::new()?;
+let ctx = Rc::new(Context::with(sink.sample_rate(), sink.channels(), sink));
+let synth = Rc::new(RefCell::new(Synth::new(ctx.as_ref())));
+ctx.transport().set_bpm(120.0)?;
+
+let ctx_cb = Rc::clone(&ctx);
+let synth_cb = Rc::clone(&synth);
+let mut seq = Sequence::new(
+    move |time, note| {
+        if let Some(note) = note {
+            synth_cb.borrow_mut()
+                .trigger_attack_release(ctx_cb.as_ref(), note, "8n", Some(time.into()))
+                .expect("sequence note");
+        }
+    },
     ["C4", "G3", "A3", "F3"],
-    "1m",
+    "4n",
 );
-seq.start(0)?;
-ctx.transport().set_bpm(120)?;
-ctx.transport().start()?;
+seq.start(&mut ctx.transport(), 0)?;
+ctx.render("1m")?;
+ctx.sink_mut().play()?;
+ctx.sink().wait_until_end()?;
 ```
 
 The callback `time` is the sample clock. Language timers (`thread::sleep`, `QTimer`) are not. Live UI hits omit `time` (`None`) and mix at the current write cursor without stopping playback.
@@ -72,26 +86,25 @@ There are two entry points. In-process apps import the crate. QML hosts (Omarchy
 drywet = { git = "https://github.com/markschellhas/drywet" }
 ```
 
-`Context` owns sample rate (44100), channels (mono by default), one sink, and one Transport. The default sink is `BufferSink` so tests never open PipeWire. For live Linux output, pass a `PipeWireSink`:
+`Context` owns a sample rate, channel count, one sink, and one Transport. The default sink is `BufferSink`, so tests never open an audio device. For live output on macOS, Linux, or Windows, use `DeviceSink` and its negotiated device format:
 
 ```rust
-use drywet::{Context, ContextConfig, PipeWireSink, Synth};
+use drywet::{Context, DeviceSink, Synth};
 
-let ctx = Context::new(ContextConfig {
-    sink: Some(Box::new(PipeWireSink::new()?)),
-    ..Default::default()
-});
-let synth = Synth::new(&ctx);
-ctx.transport().set_bpm(100)?;
-ctx.transport().start()?;
-synth.trigger_attack_release("C4", "2n", None)?;
+let sink = DeviceSink::new()?;
+let ctx = Context::with(sink.sample_rate(), sink.channels(), sink);
+let mut synth = Synth::new(&ctx);
+synth.trigger_attack_release(&ctx, "C4", "2n", None)?;
+ctx.render("1m")?;
+ctx.sink_mut().play()?;
+ctx.sink().wait_until_end()?;
 ```
 
 Offline / CI — no sound server:
 
 ```rust
-let ctx = Context::new(ContextConfig::default());
-let pcm = ctx.transport().render("1m")?;
+let ctx = Context::new();
+let pcm = ctx.render("1m")?;
 ```
 
 Musical time strings (`"4n"`, `"8n."`, `"8t"`, `"1m"`, `"+4n"`, `"4:0:0"`) resolve against that Transport. Invalid strings and out-of-range pitch or BPM return `Err`.
@@ -102,7 +115,7 @@ Same NDJSON verbs as drywet-py, so a widget can switch hosts without a new proto
 
 ```text
 cargo run --bin drywet-engine
-cargo run --bin drywet-engine -- --buffer   # BufferSink, no PipeWire
+cargo run --bin drywet-engine -- --buffer   # BufferSink, no audio device
 ```
 
 ```text
@@ -122,7 +135,7 @@ Omarchy plugins vendor a prebuilt `x86_64-unknown-linux-gnu` binary next to the 
 Sketches live in [`examples/`](examples) and are documented in [docs/examples.md](docs/examples.md). After the crate builds:
 
 ```text
-# Live PipeWire (needs a running sound server)
+# Live output through the system's default audio device
 cargo run --example metronome
 cargo run --example chords
 cargo run --example drums
@@ -131,7 +144,7 @@ cargo run --example bassline
 cargo run --example piano      # needs samples/piano/*.wav
 cargo run --example jam
 
-# Offline BufferSink → phrase.wav (no sound server)
+# Offline BufferSink → phrase.pcm (no sound server)
 cargo run --example render
 
 # NDJSON session against the engine (BufferSink)

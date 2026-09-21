@@ -4,28 +4,36 @@
 //! cargo run --example metronome
 //! ```
 
-use drywet::{Context, ContextConfig, Drum, Loop, PipeWireSink};
+mod support;
 
-fn main() -> drywet::Result<()> {
-    let ctx = Context::new(ContextConfig {
-        sink: Some(Box::new(PipeWireSink::new()?)),
-        ..Default::default()
-    });
-    let drum = Drum::new(&ctx);
+use std::cell::RefCell;
+use std::error::Error;
+use std::rc::Rc;
 
-    let click = Loop::new(
-        |time, _| {
-            let voice = if ctx.transport().position().ends_with(":0:0") {
+use drywet::{Drum, Loop};
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let ctx = Rc::new(support::device_context()?);
+    let drum = Rc::new(RefCell::new(Drum::new(ctx.as_ref())));
+
+    ctx.transport().set_bpm(72.0)?;
+    let ctx_cb = Rc::clone(&ctx);
+    let drum_cb = Rc::clone(&drum);
+    let mut click = Loop::new(
+        move |time| {
+            let voice = if ctx_cb.transport().position().ends_with(":0:0") {
                 "kick"
             } else {
                 "hat"
             };
-            drum.trigger_attack_release(voice, "32n", Some(time))
+            drum_cb
+                .borrow_mut()
+                .trigger_attack_release(ctx_cb.as_ref(), voice, "32n", Some(time.into()))
+                .expect("metronome hit");
         },
         "4n",
     );
-    click.start(0)?;
-    ctx.transport().set_bpm(72)?;
-    ctx.transport().start()?;
+    click.start(&mut ctx.transport(), 0)?;
+    support::play(ctx.as_ref(), "2m")?;
     Ok(())
 }

@@ -345,7 +345,28 @@ where
     R: BufRead,
     W: Write,
 {
-    let ctx = Rc::new(Context::with(DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS, sink));
+    run_with_config(stdin, stdout, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS, sink)
+}
+
+/// Run the NDJSON host at the sink's negotiated device format.
+///
+/// [`run`] retains the library defaults for tests and existing callers. Native
+/// device hosts should pass [`crate::DeviceSink::sample_rate`] and
+/// [`crate::DeviceSink::channels`] here so instruments render at the exact
+/// format consumed by the output callback.
+pub fn run_with_config<S, R, W>(
+    stdin: R,
+    stdout: W,
+    sample_rate: u32,
+    channels: u16,
+    sink: S,
+) -> std::io::Result<Rc<Context<S>>>
+where
+    S: Sink + 'static,
+    R: BufRead,
+    W: Write,
+{
+    let ctx = Rc::new(Context::with(sample_rate, channels, sink));
     let instrument = Rc::new(RefCell::new(LiveInstrument::Synth(Synth::new(
         ctx.as_ref(),
     ))));

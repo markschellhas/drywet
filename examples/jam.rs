@@ -4,38 +4,56 @@
 //! cargo run --example jam
 //! ```
 
-use drywet::{Context, ContextConfig, Drum, Event::*, PipeWireSink, Sequence, Synth};
+mod support;
 
-fn on_key(synth: &Synth, note: &str) -> drywet::Result<()> {
-    synth.trigger_attack_release(note, "8n", None)
+use std::cell::RefCell;
+use std::error::Error;
+use std::rc::Rc;
+
+use drywet::event::SequenceEvent::{Rest, Value};
+use drywet::instrument::InstrumentError;
+use drywet::{Context, Drum, Sequence, Sink, Synth};
+
+fn on_key<S: Sink>(ctx: &Context<S>, synth: &mut Synth, note: &str) -> Result<(), InstrumentError> {
+    synth.trigger_attack_release(ctx, note, "8n", None)?;
+    Ok(())
 }
 
-fn main() -> drywet::Result<()> {
-    let ctx = Context::new(ContextConfig {
-        sink: Some(Box::new(PipeWireSink::new()?)),
-        ..Default::default()
-    });
-    let synth = Synth::new(&ctx);
-    let drum = Drum::new(&ctx);
+fn main() -> Result<(), Box<dyn Error>> {
+    let ctx = Rc::new(support::device_context()?);
+    let synth = Rc::new(RefCell::new(Synth::new(ctx.as_ref())));
+    let drum = Rc::new(RefCell::new(Drum::new(ctx.as_ref())));
 
-    let groove = Sequence::new(
-        |time, voice| drum.trigger_attack_release(voice, "16n", Some(time)),
+    let ctx_cb = Rc::clone(&ctx);
+    let drum_cb = Rc::clone(&drum);
+    let mut groove = Sequence::new(
+        move |time, voice| {
+            drum_cb
+                .borrow_mut()
+                .trigger_attack_release(
+                    ctx_cb.as_ref(),
+                    voice.expect("a Sequence callback only runs for notes"),
+                    "16n",
+                    Some(time.into()),
+                )
+                .expect("groove hit");
+        },
         [
-            Note("kick"),
+            Value("kick".into()),
             Rest,
-            Note("hat"),
+            Value("hat".into()),
             Rest,
-            Note("snare"),
+            Value("snare".into()),
             Rest,
-            Note("hat"),
+            Value("hat".into()),
             Rest,
         ],
         "8n",
     );
-    groove.start(0)?;
+    groove.start(&mut ctx.transport(), 0)?;
     ctx.transport().set_loop(true);
     ctx.transport().set_loop_points(0, "1m")?;
-    ctx.transport().start()?;
-    on_key(&synth, "A4")?;
+    on_key(ctx.as_ref(), &mut synth.borrow_mut(), "A4")?;
+    support::play(ctx.as_ref(), "2m")?;
     Ok(())
 }

@@ -14,4 +14,6 @@ cargo run --example render
 cargo run --example engine_session
 ```
 
-Live examples open PipeWire. `render` and `engine_session --buffer` stay offline.
+Live examples open the system's default device through CPAL (CoreAudio on
+macOS). `render` and `engine_session --buffer` stay offline. The `piano`
+example additionally needs `samples/piano/*.wav`.

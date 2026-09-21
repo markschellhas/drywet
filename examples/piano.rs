@@ -7,17 +7,31 @@
 //! cargo run --example piano
 //! ```
 
-use drywet::{Context, ContextConfig, Part, PipeWireSink, Sampler};
+mod support;
 
-fn main() -> drywet::Result<()> {
-    let ctx = Context::new(ContextConfig {
-        sink: Some(Box::new(PipeWireSink::new()?)),
-        ..Default::default()
-    });
-    let piano = Sampler::from_directory("samples/piano", &ctx)?;
+use std::cell::RefCell;
+use std::error::Error;
+use std::rc::Rc;
 
-    let part = Part::new(
-        |time, note| piano.trigger_attack_release(note, "4n", Some(time)),
+use drywet::{Part, Sampler};
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let ctx = Rc::new(support::device_context()?);
+    let piano = Rc::new(RefCell::new(Sampler::from_directory(
+        ctx.as_ref(),
+        "samples/piano",
+    )?));
+
+    ctx.transport().set_bpm(90.0)?;
+    let ctx_cb = Rc::clone(&ctx);
+    let piano_cb = Rc::clone(&piano);
+    let mut part = Part::new(
+        move |time, note| {
+            piano_cb
+                .borrow_mut()
+                .trigger_attack_release(ctx_cb.as_ref(), note, "4n", Some(time.into()))
+                .expect("piano note");
+        },
         [
             ("0:0:0", "C4"),
             ("0:1:0", "E4"),
@@ -26,8 +40,7 @@ fn main() -> drywet::Result<()> {
             ("1:0:0", "C5"),
         ],
     );
-    part.start(0)?;
-    ctx.transport().set_bpm(90)?;
-    ctx.transport().start()?;
+    part.start(&mut ctx.transport(), 0)?;
+    support::play(ctx.as_ref(), "2m")?;
     Ok(())
 }

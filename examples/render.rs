@@ -1,29 +1,48 @@
-//! Offline render through BufferSink. Writes `phrase.wav` in the cwd.
+//! Offline render through BufferSink. Writes `phrase.pcm` in the cwd.
 //!
 //! ```text
 //! cargo run --example render
 //! ```
 
-use drywet::{Context, ContextConfig, Sequence, Synth};
+use std::cell::RefCell;
+use std::error::Error;
+use std::rc::Rc;
 
-fn main() -> drywet::Result<()> {
-    let ctx = Context::new(ContextConfig::default());
-    let synth = Synth::new(&ctx);
-    let seq = Sequence::new(
-        |time, note| synth.trigger_attack_release(note, "8n", Some(time)),
+use drywet::{Context, Sequence, Synth};
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let ctx = Rc::new(Context::new());
+    let synth = Rc::new(RefCell::new(Synth::new(ctx.as_ref())));
+
+    ctx.transport().set_bpm(120.0)?;
+    let ctx_cb = Rc::clone(&ctx);
+    let synth_cb = Rc::clone(&synth);
+    let mut seq = Sequence::new(
+        move |time, note| {
+            synth_cb
+                .borrow_mut()
+                .trigger_attack_release(
+                    ctx_cb.as_ref(),
+                    note.expect("a Sequence callback only runs for notes"),
+                    "8n",
+                    Some(time.into()),
+                )
+                .expect("rendered note");
+        },
         ["C4", "E4", "G4", "C5"],
         "4n",
     );
-    seq.start(0)?;
-    ctx.transport().set_bpm(120)?;
-    let pcm = ctx.transport().render("1m")?;
-    let expected = (ctx.to_seconds("1m")? * ctx.sample_rate() as f64) as usize;
+    seq.start(&mut ctx.transport(), 0)?;
+    let pcm = ctx.render("1m")?;
+    let expected = (ctx.to_seconds("1m")? * f64::from(ctx.sample_rate())) as usize;
     assert_eq!(pcm.len(), expected);
     assert!(pcm.iter().any(|sample| sample.abs() > 0.0));
 
-    if let Some(sink) = ctx.buffer_sink() {
-        std::fs::write("phrase.pcm", sink.to_pcm_s16le())?;
-        println!("wrote phrase.pcm ({} frames, {} Hz)", pcm.len(), ctx.sample_rate());
-    }
+    std::fs::write("phrase.pcm", ctx.sink().to_pcm_s16le())?;
+    println!(
+        "wrote phrase.pcm ({} frames, {} Hz)",
+        pcm.len(),
+        ctx.sample_rate()
+    );
     Ok(())
 }

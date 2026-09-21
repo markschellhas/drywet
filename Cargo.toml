@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
+cpal = "0.18.2"
 serde_json = "1"
 
 [dev-dependencies]

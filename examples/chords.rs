@@ -4,9 +4,14 @@
 //! cargo run --example chords
 //! ```
 
-use drywet::{Context, ContextConfig, PipeWireSink, Synth};
+mod support;
 
-fn on_pad(synth: &Synth, name: &str) -> drywet::Result<()> {
+use std::error::Error;
+
+use drywet::instrument::InstrumentError;
+use drywet::{Context, Sink, Synth};
+
+fn on_pad<S: Sink>(ctx: &Context<S>, synth: &mut Synth, name: &str) -> Result<(), InstrumentError> {
     let notes: &[&str] = match name {
         "C" => &["C4", "E4", "G4"],
         "Am" => &["A3", "C4", "E4"],
@@ -15,18 +20,15 @@ fn on_pad(synth: &Synth, name: &str) -> drywet::Result<()> {
         _ => return Ok(()),
     };
     for note in notes {
-        synth.trigger_attack_release(*note, "2n", None)?;
+        synth.trigger_attack_release(ctx, *note, "2n", None)?;
     }
     Ok(())
 }
 
-fn main() -> drywet::Result<()> {
-    let ctx = Context::new(ContextConfig {
-        sink: Some(Box::new(PipeWireSink::new()?)),
-        ..Default::default()
-    });
-    let synth = Synth::new(&ctx);
-    ctx.transport().start()?;
-    on_pad(&synth, "C")?;
+fn main() -> Result<(), Box<dyn Error>> {
+    let ctx = support::device_context()?;
+    let mut synth = Synth::new(&ctx);
+    on_pad(&ctx, &mut synth, "C")?;
+    support::play(&ctx, "1m")?;
     Ok(())
 }
