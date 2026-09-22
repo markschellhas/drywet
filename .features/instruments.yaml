@@ -1,0 +1,30 @@
+feature_name: instruments
+purpose: "Voices that mix PCM onto the Context sink: additive Synth, Drum transients, and Sampler WAV map with pitch-fill."
+
+entry_points:
+  - src/instrument.rs
+  - examples/chords.rs
+  - examples/drums.rs
+  - examples/piano.rs
+
+apps:
+  - src
+  - examples
+
+user_flow:
+  synth: "App constructs Synth::new(&ctx) → trigger_attack_release(&ctx, note, duration, time); time=None mixes at write cursor"
+  drum: "App calls Drum::trigger(&ctx, \"kick\"|\"snare\"|\"hat\", time); unknown names are Err; steps_per_bar((4, 4)) is 16"
+  sampler: "App loads Sampler::from_directory or with_map of 16-bit WAV; missing pitches pitch-shift the nearest sample"
+  error: "Voice cap exceeded, empty sampler, or unreadable WAV → InstrumentError"
+
+related_features:
+  - context (sample rate and sink)
+  - time (note names and durations)
+  - sinks (mix destination)
+  - events (callbacks must pass time into triggers)
+  - engine (warmup selects synth, drum, or sampler)
+
+notes: >
+  Instruments take &Context on every trigger. Sampler loop_flag is stored; the
+  held-loop mixer is not implemented. trigger_release decrements the voice count
+  and does not silence already-mixed PCM.

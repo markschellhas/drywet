@@ -1,0 +1,27 @@
+feature_name: transport
+purpose: "The arrangement clock: start/stop/pause/toggle, tempo, loop points, playhead, schedule APIs, and fire_until."
+
+entry_points:
+  - src/transport.rs
+  - examples/sixeight.rs
+
+apps:
+  - src
+  - examples
+
+user_flow:
+  primary: "App calls ctx.transport().start() → state started, sink marked accepted, seconds reset to 0 from stopped"
+  tempo: "App writes bpm 40–240; a write while started applies on the next start from stopped"
+  schedule: "App registers schedule / schedule_repeat callbacks that receive sample time; fire_until or ctx.render runs them"
+  stop: "App calls stop() → arrangement clock stops and sink.stop() without close; dispose() also closes the sink"
+
+related_features:
+  - context (owns the Transport; render lives on Context)
+  - time (to_seconds / to_ticks / to_frequency)
+  - events (Sequence / Part / Loop attach via SequenceClock)
+  - sinks (start marks accepted; stop does not close)
+  - instruments (callbacks pass time into triggers)
+
+notes: >
+  ctx.transport() is a short-lived TransportRef. PPQ 192. MAX_SCHEDULE_SECONDS 600.
+  Language timers are not the clock.

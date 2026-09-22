@@ -1,0 +1,55 @@
+# Feature Map CLI Reference
+
+Invocation: `feature-map` (on PATH) or `./bin/feature-map` (repo-local shim).
+
+Global flags: `--json`, `--version`
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `list [--json]` | All feature slugs; JSON includes mtime and app count |
+| `show <name> [--section <key>] [--json]` | Full map or one top-level section |
+| `viewer [--no-open] [--timeout SECONDS] [--json]` | Local ephemeral browser view of all maps. Human command; agents keep using `show` |
+| `<name>` | Alias for `show <name>` |
+| `search <query> [--json]` | Full-text search across all maps |
+| `find <path-fragment> [--json]` | Reverse lookup by path string |
+| `graph [name] [--format mermaid\|json\|dot]` | `related_features` graph |
+| `validate [--strict] [--json]` | Structural validation |
+| `check [--json]` | Staleness check for entry-point paths |
+| `impact <file> [--transitive] [--json]` | Features referencing a file |
+| `stats [--json]` | Coverage statistics |
+| `init` | Bootstrap `.features/`, agent skill, config, AGENTS.md, shim |
+| `init --skill-dir DIR` | Mirror the skill into an extra directory (repeatable) |
+| `init [-y] [-h <harness>]` | Also offer/launch a harness (claude\|cursor-agent\|opencode\|grok\|codex\|gemini\|pi) to author maps |
+| `init <name> [--force]` | Scaffold `.features/<name>.yaml` |
+| `init --upgrade-skill` | Refresh the agent skill in every deployed location |
+| `install [--json]` | Verify install and repo setup; reports every skill
+location and the packaged `GUIDE.md` path |
+| `update [--json]` | Upgrade this CLI via the package manager that installed it |
+
+## Examples
+
+```bash
+feature-map list
+feature-map auth
+feature-map show auth --section entry_points
+feature-map viewer --no-open
+feature-map search billing
+feature-map find src/app.py
+feature-map graph auth --format mermaid
+feature-map validate
+feature-map check --json
+feature-map impact src/app.py
+feature-map stats --json
+feature-map init
+feature-map init -y -h claude
+feature-map init billing --force
+feature-map update
+```
+
+## Exit codes
+
+- `0` — success
+- `1` — user error (e.g. feature not found)
+- `2` — validation failure (`validate --strict`)

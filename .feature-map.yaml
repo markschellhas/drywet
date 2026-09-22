@@ -1,0 +1,13 @@
+# Feature Map CLI configuration
+features_dir: .features
+apps:
+  - src
+  - examples
+required_sections:
+  - purpose
+  - entry_points
+min_cli_version: "1.0.0"
+# Extra directories to mirror the agent skill into, for harnesses this CLI does
+# not know about. Repo-relative; each gets a <dir>/feature-map/ copy on init.
+# skill_dirs:
+#   - .my-agent/skills

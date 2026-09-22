@@ -1,0 +1,33 @@
+feature_name: sinks
+purpose: "PCM destinations: BufferSink for tests and offline render, DeviceSink for native output, PipeWireSink for a callback-shaped backend."
+
+entry_points:
+  - src/sink.rs
+  - src/sink_device.rs
+  - src/sink_pipewire.rs
+  - examples/metronome.rs
+
+apps:
+  - src
+  - examples
+
+core_components:
+  BufferSink: src/sink.rs
+  DeviceSink: src/sink_device.rs
+  PipeWireSink: src/sink_pipewire.rs
+  example_device_context: examples/support/mod.rs
+
+user_flow:
+  tests: "Context::new() uses BufferSink; mix sums tails; write advances write_cursor; latency_ms is 0"
+  live: "App opens DeviceSink::new() → Context::with(negotiated rate/channels, sink) → play() then wait_until_end()"
+  pipewire: "PipeWireSink::new injects MockStream; a real device uses PipeWireSink::with_backend"
+
+related_features:
+  - context (owns the sink)
+  - transport (start marks accepted; stop does not close)
+  - instruments (mix PCM at sample frames)
+  - engine (DeviceSink default; BufferSink via --buffer)
+
+notes: >
+  Instruments mix onto the Context sink; there is no node graph. cargo test uses
+  BufferSink only. Live PipeWire tests are ignored unless DRYWET_LIVE_AUDIO=1.

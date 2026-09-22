@@ -1,0 +1,27 @@
+feature_name: context
+purpose: "How an in-process app constructs one Context that owns sample rate, channels, a sink, and one Transport."
+
+entry_points:
+  - src/context.rs
+  - src/lib.rs
+  - examples/render.rs
+
+apps:
+  - src
+  - examples
+
+user_flow:
+  primary: "App calls Context::new() → BufferSink at 44100 Hz mono + one Transport"
+  live: "App opens DeviceSink → Context::with(rate, channels, sink) → instruments share that Context"
+  render: "App calls ctx.render(duration) → starts clock, fires events, pads the sink, returns PCM"
+
+related_features:
+  - transport (owned playhead and schedule)
+  - sinks (default BufferSink; DeviceSink and PipeWireSink via Context::with)
+  - engine (stdio host constructs one Context)
+  - instruments (constructed with &Context)
+  - time (ctx.to_seconds from callbacks)
+
+notes: >
+  Context and instruments are !Send (RefCell). Keep them on one thread; share with
+  Rc<RefCell<_>> from 'static callbacks.
