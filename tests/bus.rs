@@ -87,22 +87,38 @@ fn bus_param_after_mix_changes_next_render() {
 
 #[test]
 fn bus_integrator_state_is_per_bus() {
-    let ctx = Context::new();
-    let drums = ctx.bus("drums").unwrap();
+    let shared = Context::new();
+    let drums = shared.bus("drums").unwrap();
     drums
         .set_inserts(vec![boxed(Integrator { acc: 0.0 })])
         .unwrap();
-    ctx.sink_mut()
+    shared
+        .sink_mut()
         .mix_on(MixDest::Bus(drums.id()), &[1.0], Some(0))
         .unwrap();
-    ctx.sink_mut()
+    shared
+        .sink_mut()
         .mix_on(MixDest::Bus(drums.id()), &[1.0], Some(1))
         .unwrap();
-    ctx.sink_mut().mix(&[1.0], Some(2));
+    let shared_wet = shared
+        .render(2.0 / f64::from(shared.sample_rate()))
+        .unwrap();
+    assert_eq!(&shared_wet[..2], &[1.0, 2.0]);
 
-    let wet = ctx.render(3.0 / f64::from(ctx.sample_rate())).unwrap();
-    assert_eq!(&wet[..3], &[1.0, 2.0, 1.0]);
-    assert_eq!(&ctx.sink().frames()[..3], &[0.0, 0.0, 1.0]);
+    let split = Context::new();
+    let drums = split.bus("drums").unwrap();
+    drums
+        .set_inserts(vec![boxed(Integrator { acc: 0.0 })])
+        .unwrap();
+    split.sink_mut().mix(&[1.0], Some(0));
+    split
+        .sink_mut()
+        .mix_on(MixDest::Bus(drums.id()), &[1.0], Some(1))
+        .unwrap();
+    let split_wet = split.render(2.0 / f64::from(split.sample_rate())).unwrap();
+    // Master hit is not fed into the bus integrator (that would be [1, 2]).
+    assert_eq!(&split_wet[..2], &[1.0, 1.0]);
+    assert_eq!(&split.sink().frames()[..2], &[1.0, 0.0]);
 }
 
 #[test]
@@ -266,25 +282,36 @@ fn pipewire_bus_fold_and_live_param() {
 
 #[test]
 fn pipewire_bus_integrator_ignores_master_hits() {
-    let mut sink = PipeWireSink::new(44100, 1);
-    let drums = sink.ensure_bus("drums").unwrap();
+    let mut shared = PipeWireSink::new(44100, 1);
+    let drums = shared.ensure_bus("drums").unwrap();
     drums
         .set_inserts(vec![boxed(Integrator { acc: 0.0 })])
         .unwrap();
-    sink.mix_on(MixDest::Bus(drums.id()), &[1.0], Some(0))
-        .unwrap();
-    sink.mix(&[1.0], Some(1));
-    sink.mix_on(MixDest::Bus(drums.id()), &[1.0], Some(2))
+    shared
+        .mix_on(MixDest::Bus(drums.id()), &[1.0, 1.0], Some(0))
         .unwrap();
     let mut a = [0.0f32; 1];
-    sink.process(&mut a);
+    shared.process(&mut a);
     let mut b = [0.0f32; 1];
-    sink.process(&mut b);
-    let mut c = [0.0f32; 1];
-    sink.process(&mut c);
+    shared.process(&mut b);
     assert_eq!(a, [1.0]);
-    assert_eq!(b, [1.0]);
-    assert_eq!(c, [2.0]);
+    assert_eq!(b, [2.0]);
+
+    let mut split = PipeWireSink::new(44100, 1);
+    let drums = split.ensure_bus("drums").unwrap();
+    drums
+        .set_inserts(vec![boxed(Integrator { acc: 0.0 })])
+        .unwrap();
+    split.mix(&[1.0], Some(0));
+    split
+        .mix_on(MixDest::Bus(drums.id()), &[1.0], Some(1))
+        .unwrap();
+    let mut c = [0.0f32; 1];
+    split.process(&mut c);
+    let mut d = [0.0f32; 1];
+    split.process(&mut d);
+    assert_eq!(c, [1.0]);
+    assert_eq!(d, [1.0]);
 }
 
 #[test]
