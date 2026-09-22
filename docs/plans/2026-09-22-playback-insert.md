@@ -29,7 +29,7 @@
 
 ## Progress
 
-**Status:** `██████████████░░░░░░` 5/7 done (71%) · Task 6 in flight
+**Status:** `█████████████████░░░` 6/7 done (86%) · Task 7 in flight
 
 | # | Task | Status | Next |
 |---|------|--------|------|
@@ -38,8 +38,8 @@
 | 3 | Context::set_inserts; render returns wet | `done` | — |
 | 4 | PipeWireSink::process applies chain | `done` | — |
 | 5 | DeviceSink callback applies chain | `done` | — |
-| 6 | Patch maps and output docs | `implementing` | implement |
-| 7 | Full-suite regression | `todo` | implement |
+| 6 | Patch maps and output docs | `done` | — |
+| 7 | Full-suite regression | `implementing` | implement |
 
 Shared test command: `cargo test -q`
 
@@ -840,11 +840,11 @@ git commit -m "feat(sink): run insert chain in DeviceSink callback"
 
 ---
 
-### [ ] Task 6: Patch maps and output docs
+### [x] Task 6: Patch maps and output docs
 
-**Status:** `implementing`
-**Resume:** Patch `.features/sinks.yaml` + `.features/context.yaml`, `docs/reference/output.md`, three identical `rust-api.md` copies. Do not create `.features/insert.yaml`. Do not change `.features/engine.yaml`.
-**Commits:** —
+**Status:** `done`
+**Resume:** —
+**Commits:** `e456e7b` docs: map playback inserts onto sinks and context
 
 **Files:**
 - Modify: `.features/sinks.yaml`, `.features/context.yaml`
@@ -919,8 +919,8 @@ git commit -m "docs: map playback inserts onto sinks and context"
 
 ### [ ] Task 7: Full-suite regression
 
-**Status:** `todo`
-**Resume:** —
+**Status:** `implementing`
+**Resume:** Run `cargo test -q` and `./bin/feature-map validate && ./bin/feature-map check`. Skip commit if green.
 **Commits:** —
 
 **Files:** none unless a test fails.
