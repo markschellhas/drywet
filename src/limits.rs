@@ -24,3 +24,6 @@ pub const DEFAULT_MAX_VOICES: u32 = 32;
 
 /// Longest schedule interval accepted by Transport, in seconds.
 pub const MAX_SCHEDULE_SECONDS: f64 = 600.0;
+
+/// Max playback inserts on one sink. Replacing the chain never grows in the callback.
+pub const MAX_INSERTS: usize = 8;
