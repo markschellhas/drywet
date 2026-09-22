@@ -1,6 +1,6 @@
 # PRD: Playback Insert
 
-**Status:** Draft
+**Status:** Shipped
 **Owner:** drywet
 
 ---
