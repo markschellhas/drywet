@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use drywet::insert::{apply_interleaved, Insert, InsertChain, InsertError};
 use drywet::limits::MAX_INSERTS;
+use drywet::sink::Sink;
+use drywet::BufferSink;
 
 struct Gain {
     gain: f32,
@@ -208,4 +210,29 @@ fn live_gain_handle_changes_next_block() {
     chain.process(&mut second);
     assert_eq!(first, [1.0]);
     assert_eq!(second, [0.5]);
+}
+
+#[test]
+fn buffer_mix_stays_dry_when_inserts_attached() {
+    let mut sink = BufferSink::new(8, 1);
+    sink.set_inserts(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    sink.mix(&[0.25, 0.5], Some(0));
+    assert_eq!(sink.frames(), &[0.25, 0.5]);
+    let pcm = sink.to_pcm_s16le();
+    let mut expected = Vec::new();
+    expected
+        .extend_from_slice(&((0.25f32.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes());
+    expected.extend_from_slice(&((0.5f32.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes());
+    assert_eq!(pcm, expected);
+}
+
+#[test]
+fn buffer_apply_inserts_wets_a_copy_not_frames() {
+    let mut sink = BufferSink::new(8, 1);
+    sink.set_inserts(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    sink.mix(&[0.25], Some(0));
+    let mut wet = sink.frames().to_vec();
+    sink.apply_inserts(&mut wet);
+    assert_eq!(wet, vec![0.5]);
+    assert_eq!(sink.frames(), &[0.25]);
 }
