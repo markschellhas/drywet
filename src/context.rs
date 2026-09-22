@@ -1,5 +1,6 @@
 use std::cell::{Ref, RefCell, RefMut};
 
+use crate::bus::{validate_name, Bus, BusError};
 use crate::insert::{Insert, InsertError};
 use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 use crate::sink::{BufferSink, Sink};
@@ -100,6 +101,14 @@ impl<S: Sink> Context<S> {
         self.set_inserts(Vec::new())
     }
 
+    /// Create or get a named extra output bus on the owned sink.
+    ///
+    /// `"master"` is reserved. Same name returns the same bus for this Context.
+    pub fn bus(&self, name: &str) -> Result<Bus, BusError> {
+        validate_name(name)?;
+        self.sink.borrow_mut().ensure_bus(name)
+    }
+
     /// Start if needed, fire scheduled events through `duration`, pad the
     /// sink, and return a wet copy of the sink frames.
     ///
@@ -121,7 +130,7 @@ impl<S: Sink> Context<S> {
             sink.write(&vec![0.0; needed - cursor]);
         }
         let mut pcm = sink.frames().to_vec();
-        sink.apply_inserts(&mut pcm);
+        sink.fold_into(&mut pcm);
         Ok(pcm)
     }
 }

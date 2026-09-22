@@ -23,6 +23,7 @@
 /// Crate version string.
 pub const VERSION: &str = "0.1.0";
 
+pub mod bus;
 pub mod context;
 pub mod engine;
 pub mod event;
@@ -36,6 +37,7 @@ mod sink_pipewire;
 pub mod time;
 pub mod transport;
 
+pub use bus::{Bus, BusError, BusId, MixDest};
 pub use context::Context;
 pub use engine::{run, run_with_config};
 pub use event::{Loop, Part, Sequence};

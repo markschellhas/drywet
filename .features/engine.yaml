@@ -26,4 +26,4 @@ related_features:
 notes: >
   Do not pretty-print JSON across lines. trigger_attack / trigger_release are
   aliases of note-on / note-off. Sampler warmup loop_flag is stored; held-loop
-  mix is not implemented.
+  mix is not implemented. No bus or insert commands.

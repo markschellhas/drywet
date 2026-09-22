@@ -15,6 +15,7 @@ user_flow:
   live: "App opens DeviceSink → Context::with(rate, channels, sink) → instruments share that Context"
   render: "App calls ctx.render(duration) → starts clock, fires events, pads the sink, returns wet PCM; sink.frames() stays dry"
   insert: "App calls ctx.set_inserts(...) → forwards to the owned sink"
+  bus: "App calls ctx.bus(name) → create-or-get a named extra mix destination on the owned sink"
 
 related_features:
   - transport (owned playhead and schedule)

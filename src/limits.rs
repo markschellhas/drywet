@@ -27,3 +27,6 @@ pub const MAX_SCHEDULE_SECONDS: f64 = 600.0;
 
 /// Max playback inserts on one sink. Replacing the chain never grows in the callback.
 pub const MAX_INSERTS: usize = 8;
+
+/// Max extra named output buses on one sink (not counting implicit master).
+pub const MAX_BUSES: usize = 8;

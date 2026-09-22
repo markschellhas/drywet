@@ -39,6 +39,19 @@ let pcm = ctx.render("1m")?;
 
 `render` returns a processed copy. `sink.frames()` has the same length and stays dry. `PipeWireSink::process` and the `DeviceSink` callback apply the same chain after summing queued PCM. An empty chain is identity. There is no engine NDJSON command for inserts.
 
+## Output buses
+
+Named extra mix destinations share the insert contract. Instruments mix dry onto a bus or onto master. At output, each bus is processed, folded into the master stream, then optional master inserts run. Zero extra buses is today's behavior.
+
+```rust
+let drums = ctx.bus("drums")?;
+drums.set_inserts(vec![Box::new(my_insert) as Box<dyn drywet::Insert>])?;
+sampler.trigger_attack_on(&ctx, &drums, "C4", Some(time.into()))?;
+synth.trigger_attack_release(&ctx, "E4", "8n", Some(time.into()))?;
+```
+
+`ctx.bus("master")` is reserved. Same name returns the same bus for the Context lifetime. Dropping the handle does not destroy the bus. `MAX_BUSES` extra buses (not counting master); creating more is `Err`. There is no engine NDJSON command for buses.
+
 ## PipeWire sink
 
 `PipeWireSink::new(sample_rate, channels)` is a callback sink for integration and testing. It is not the default live path for examples and does not select or open a system output device. Use `DeviceSink` for audible playback.

@@ -5,6 +5,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
+use crate::bus::{Bus, BusError, MixDest};
 use crate::context::Context;
 use crate::limits::DEFAULT_MAX_VOICES;
 use crate::pitch::{midi_to_hz, IntoNote, PitchError};
@@ -32,6 +33,8 @@ pub enum InstrumentError {
     InvalidWav(String),
     /// [`Sampler`] trigger ran with an empty sample map.
     EmptySampler,
+    /// Mix destination was not a live bus on this Context.
+    Bus(BusError),
 }
 
 impl fmt::Display for InstrumentError {
@@ -43,6 +46,7 @@ impl fmt::Display for InstrumentError {
             InstrumentError::Time(err) => write!(f, "{err}"),
             InstrumentError::InvalidWav(msg) => write!(f, "{msg}"),
             InstrumentError::EmptySampler => write!(f, "sampler has no samples"),
+            InstrumentError::Bus(err) => write!(f, "{err}"),
         }
     }
 }
@@ -52,6 +56,7 @@ impl Error for InstrumentError {
         match self {
             InstrumentError::Pitch(err) => Some(err),
             InstrumentError::Time(err) => Some(err),
+            InstrumentError::Bus(err) => Some(err),
             InstrumentError::VoiceLimitExceeded
             | InstrumentError::UnknownDrum(_)
             | InstrumentError::InvalidWav(_)
@@ -69,6 +74,12 @@ impl From<PitchError> for InstrumentError {
 impl From<TimeError> for InstrumentError {
     fn from(err: TimeError) -> Self {
         InstrumentError::Time(err)
+    }
+}
+
+impl From<BusError> for InstrumentError {
+    fn from(err: BusError) -> Self {
+        InstrumentError::Bus(err)
     }
 }
 
@@ -121,7 +132,27 @@ impl Synth {
         D: IntoTime,
     {
         self.acquire()?;
-        let result = self.mix_note(ctx, note, Some(duration), time);
+        let result = self.mix_note(ctx, MixDest::Master, note, Some(duration), time);
+        self.release_voice();
+        result.map(|()| self)
+    }
+
+    /// [`Self::trigger_attack_release`] mixing onto `bus` instead of master.
+    pub fn trigger_attack_release_on<S, N, D>(
+        &mut self,
+        ctx: &Context<S>,
+        bus: &Bus,
+        note: N,
+        duration: D,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError>
+    where
+        S: Sink,
+        N: IntoNote,
+        D: IntoTime,
+    {
+        self.acquire()?;
+        let result = self.mix_note(ctx, MixDest::Bus(bus.id()), note, Some(duration), time);
         self.release_voice();
         result.map(|()| self)
     }
@@ -138,7 +169,29 @@ impl Synth {
         N: IntoNote,
     {
         self.acquire()?;
-        match self.mix_note(ctx, note, None::<f64>, time) {
+        match self.mix_note(ctx, MixDest::Master, note, None::<f64>, time) {
+            Ok(()) => Ok(self),
+            Err(err) => {
+                self.release_voice();
+                Err(err)
+            }
+        }
+    }
+
+    /// [`Self::trigger_attack`] mixing onto `bus` instead of master.
+    pub fn trigger_attack_on<S, N>(
+        &mut self,
+        ctx: &Context<S>,
+        bus: &Bus,
+        note: N,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError>
+    where
+        S: Sink,
+        N: IntoNote,
+    {
+        self.acquire()?;
+        match self.mix_note(ctx, MixDest::Bus(bus.id()), note, None::<f64>, time) {
             Ok(()) => Ok(self),
             Err(err) => {
                 self.release_voice();
@@ -156,6 +209,16 @@ impl Synth {
         let _midi = note.into_midi()?;
         self.release_voice();
         Ok(self)
+    }
+
+    /// [`Self::trigger_release`]. Destination does not rewrite already-mixed PCM.
+    pub fn trigger_release_on(
+        &mut self,
+        _bus: &Bus,
+        note: impl IntoNote,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError> {
+        self.trigger_release(note, time)
     }
 
     /// Drop every counted voice. v1 one-shot does not silence already-mixed PCM.
@@ -181,6 +244,7 @@ impl Synth {
     fn mix_note<S, N, D>(
         &self,
         ctx: &Context<S>,
+        dest: MixDest,
         note: N,
         duration: Option<D>,
         time: Option<TimeValue>,
@@ -196,7 +260,7 @@ impl Synth {
             None => TRIGGER_ATTACK_SECONDS,
         };
         let frames = render_additive(freq, duration_s, self.sample_rate);
-        mix_at_time(ctx, &frames, time)
+        mix_at_time_on(ctx, dest, &frames, time)
     }
 }
 
@@ -231,7 +295,20 @@ impl Drum {
         time: Option<TimeValue>,
     ) -> Result<&mut Self, InstrumentError> {
         let frames = render_drum(name, self.sample_rate)?;
-        mix_at_time(ctx, &frames, time)?;
+        mix_at_time_on(ctx, MixDest::Master, &frames, time)?;
+        Ok(self)
+    }
+
+    /// [`Self::trigger`] mixing onto `bus` instead of master.
+    pub fn trigger_on<S: Sink>(
+        &mut self,
+        ctx: &Context<S>,
+        bus: &Bus,
+        name: &str,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError> {
+        let frames = render_drum(name, self.sample_rate)?;
+        mix_at_time_on(ctx, MixDest::Bus(bus.id()), &frames, time)?;
         Ok(self)
     }
 
@@ -245,9 +322,30 @@ impl Drum {
         self.trigger(ctx, name, time)
     }
 
+    /// Alias of [`Drum::trigger_on`].
+    pub fn trigger_attack_on<S: Sink>(
+        &mut self,
+        ctx: &Context<S>,
+        bus: &Bus,
+        name: &str,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError> {
+        self.trigger_on(ctx, bus, name, time)
+    }
+
     /// No-op. Drum hits are one-shot transients.
     pub fn trigger_release(&mut self, _name: &str, _time: Option<TimeValue>) -> &mut Self {
         self
+    }
+
+    /// No-op. Drum hits are one-shot transients.
+    pub fn trigger_release_on(
+        &mut self,
+        _bus: &Bus,
+        name: &str,
+        time: Option<TimeValue>,
+    ) -> &mut Self {
+        self.trigger_release(name, time)
     }
 
     /// Alias of [`Drum::trigger`]. `duration` is ignored.
@@ -263,6 +361,22 @@ impl Drum {
         D: IntoTime,
     {
         self.trigger(ctx, name, time)
+    }
+
+    /// Alias of [`Drum::trigger_on`]. `duration` is ignored.
+    pub fn trigger_attack_release_on<S, D>(
+        &mut self,
+        ctx: &Context<S>,
+        bus: &Bus,
+        name: &str,
+        _duration: D,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError>
+    where
+        S: Sink,
+        D: IntoTime,
+    {
+        self.trigger_on(ctx, bus, name, time)
     }
 
     /// No-op. Drum hits are one-shot transients.
@@ -384,7 +498,29 @@ impl Sampler {
         N: IntoNote,
     {
         self.acquire()?;
-        match self.mix_sample(ctx, note, None::<f64>, time) {
+        match self.mix_sample(ctx, MixDest::Master, note, None::<f64>, time) {
+            Ok(()) => Ok(self),
+            Err(err) => {
+                self.release_voice();
+                Err(err)
+            }
+        }
+    }
+
+    /// [`Self::trigger_attack`] mixing onto `bus` instead of master.
+    pub fn trigger_attack_on<S, N>(
+        &mut self,
+        ctx: &Context<S>,
+        bus: &Bus,
+        note: N,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError>
+    where
+        S: Sink,
+        N: IntoNote,
+    {
+        self.acquire()?;
+        match self.mix_sample(ctx, MixDest::Bus(bus.id()), note, None::<f64>, time) {
             Ok(()) => Ok(self),
             Err(err) => {
                 self.release_voice();
@@ -407,7 +543,27 @@ impl Sampler {
         D: IntoTime,
     {
         self.acquire()?;
-        let result = self.mix_sample(ctx, note, Some(duration), time);
+        let result = self.mix_sample(ctx, MixDest::Master, note, Some(duration), time);
+        self.release_voice();
+        result.map(|()| self)
+    }
+
+    /// [`Self::trigger_attack_release`] mixing onto `bus` instead of master.
+    pub fn trigger_attack_release_on<S, N, D>(
+        &mut self,
+        ctx: &Context<S>,
+        bus: &Bus,
+        note: N,
+        duration: D,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError>
+    where
+        S: Sink,
+        N: IntoNote,
+        D: IntoTime,
+    {
+        self.acquire()?;
+        let result = self.mix_sample(ctx, MixDest::Bus(bus.id()), note, Some(duration), time);
         self.release_voice();
         result.map(|()| self)
     }
@@ -421,6 +577,16 @@ impl Sampler {
         let _midi = note.into_midi()?;
         self.release_voice();
         Ok(self)
+    }
+
+    /// [`Self::trigger_release`]. Destination does not rewrite already-mixed PCM.
+    pub fn trigger_release_on(
+        &mut self,
+        _bus: &Bus,
+        note: impl IntoNote,
+        time: Option<TimeValue>,
+    ) -> Result<&mut Self, InstrumentError> {
+        self.trigger_release(note, time)
     }
 
     /// Drop every counted voice. v1 one-shot does not silence already-mixed PCM.
@@ -446,6 +612,7 @@ impl Sampler {
     fn mix_sample<S, N, D>(
         &self,
         ctx: &Context<S>,
+        dest: MixDest,
         note: N,
         duration: Option<D>,
         time: Option<TimeValue>,
@@ -464,7 +631,7 @@ impl Sampler {
                 frames.truncate(n);
             }
         }
-        mix_at_time(ctx, &frames, time)
+        mix_at_time_on(ctx, dest, &frames, time)
     }
 
     fn nearest(&self, midi: u8) -> Result<Vec<f32>, InstrumentError> {
@@ -485,9 +652,10 @@ impl Sampler {
     }
 }
 
-/// Mix `frames` at `time`, or at the write cursor when `time` is `None`.
-fn mix_at_time<S: Sink>(
+/// Mix `frames` onto `dest` at `time`, or at the write cursor when `time` is `None`.
+fn mix_at_time_on<S: Sink>(
     ctx: &Context<S>,
+    dest: MixDest,
     frames: &[f32],
     time: Option<TimeValue>,
 ) -> Result<(), InstrumentError> {
@@ -498,7 +666,7 @@ fn mix_at_time<S: Sink>(
             Some((seconds * f64::from(ctx.sample_rate())).round() as usize)
         }
     };
-    ctx.sink_mut().mix(frames, at_sample);
+    ctx.sink_mut().mix_on(dest, frames, at_sample)?;
     Ok(())
 }
 

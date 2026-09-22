@@ -7,6 +7,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,7 +18,9 @@ use cpal::{
     StreamConfig, I24,
 };
 
-use crate::insert::{apply_interleaved, Insert, InsertChain, InsertError};
+use crate::bus::{mix_mono, validate_name, Bus, BusControl, BusError, BusId, MixDest};
+use crate::insert::{apply_interleaved, Insert, InsertChain, InsertError, CHUNK_FRAMES};
+use crate::limits::MAX_BUSES;
 use crate::sink::Sink;
 
 /// Failure opening, starting, or draining the system's default audio device.
@@ -38,6 +41,25 @@ impl fmt::Display for DeviceSinkError {
 
 impl Error for DeviceSinkError {}
 
+#[derive(Debug)]
+struct BusPlayback {
+    used: bool,
+    name: String,
+    mono: Vec<f32>,
+    inserts: InsertChain,
+}
+
+impl Default for BusPlayback {
+    fn default() -> Self {
+        Self {
+            used: false,
+            name: String::new(),
+            mono: Vec::new(),
+            inserts: InsertChain::new(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct Playback {
     mono: Vec<f32>,
@@ -48,10 +70,44 @@ struct Playback {
     accepted: bool,
     stream_error: Option<String>,
     inserts: InsertChain,
+    buses: [BusPlayback; MAX_BUSES],
+}
+
+struct DeviceBusControl {
+    state: Arc<Mutex<Playback>>,
+}
+
+impl BusControl for DeviceBusControl {
+    fn set_inserts(&self, id: BusId, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        let mut state = lock(&self.state);
+        let bus = state.buses.get_mut(id.index()).filter(|bus| bus.used);
+        if let Some(bus) = bus {
+            bus.inserts.set(inserts)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Playback {
+    fn dry_stores_empty(&self) -> bool {
+        self.mono.is_empty()
+            && self
+                .buses
+                .iter()
+                .all(|bus| !bus.used || bus.mono.is_empty())
+    }
+
     fn mix(&mut self, frames: &[f32], at_sample: Option<usize>) {
+        let _ = self.mix_dest(MixDest::Master, frames, at_sample);
+    }
+
+    fn mix_dest(
+        &mut self,
+        dest: MixDest,
+        frames: &[f32],
+        at_sample: Option<usize>,
+    ) -> Result<(), BusError> {
         let mut at = at_sample.unwrap_or_else(|| self.write_cursor());
         let mut frames = frames;
         if at < self.base_cursor {
@@ -60,20 +116,55 @@ impl Playback {
             at = self.base_cursor;
         }
         if frames.is_empty() {
-            return;
+            if let MixDest::Bus(id) = dest {
+                if !self.buses.get(id.index()).is_some_and(|bus| bus.used) {
+                    return Err(BusError::UnknownBus);
+                }
+            }
+            return Ok(());
         }
-        if self.mono.is_empty() {
+        if self.dry_stores_empty() {
             self.base_cursor = self.playback_cursor.min(at);
         }
         let start = at.saturating_sub(self.base_cursor);
-        let needed = start.saturating_add(frames.len());
-        if self.mono.len() < needed {
-            self.mono.resize(needed, 0.0);
-        }
-        for (destination, source) in self.mono[start..needed].iter_mut().zip(frames) {
-            *destination += *source;
+        match dest {
+            MixDest::Master => {
+                mix_mono(&mut self.mono, frames, start);
+            }
+            MixDest::Bus(id) => {
+                let bus = self
+                    .buses
+                    .get_mut(id.index())
+                    .filter(|bus| bus.used)
+                    .ok_or(BusError::UnknownBus)?;
+                mix_mono(&mut bus.mono, frames, start);
+            }
         }
         self.accepted = true;
+        Ok(())
+    }
+
+    fn ensure_bus(&mut self, name: &str) -> Result<BusId, BusError> {
+        validate_name(name)?;
+        if let Some((index, _)) = self
+            .buses
+            .iter()
+            .enumerate()
+            .find(|(_, bus)| bus.used && bus.name == name)
+        {
+            return Ok(BusId::new(index as u8));
+        }
+        if let Some((index, bus)) = self.buses.iter_mut().enumerate().find(|(_, bus)| !bus.used) {
+            bus.used = true;
+            bus.name = name.to_string();
+            bus.mono.clear();
+            bus.inserts = InsertChain::new();
+            return Ok(BusId::new(index as u8));
+        }
+        Err(BusError::BusFull {
+            max: MAX_BUSES,
+            got: MAX_BUSES + 1,
+        })
     }
 
     fn write(&mut self, frames: &[f32]) {
@@ -93,9 +184,7 @@ impl Playback {
     }
 
     fn queued_end(&self) -> usize {
-        self.base_cursor
-            .saturating_add(self.mono.len())
-            .max(self.staging_cursor)
+        self.queued_dry_end().max(self.staging_cursor)
     }
 
     fn sample_at(&self, cursor: usize) -> f32 {
@@ -106,15 +195,59 @@ impl Playback {
             .unwrap_or(0.0)
     }
 
+    fn queued_dry_end(&self) -> usize {
+        let mut end = self.base_cursor.saturating_add(self.mono.len());
+        for bus in &self.buses {
+            if bus.used {
+                end = end.max(self.base_cursor.saturating_add(bus.mono.len()));
+            }
+        }
+        end
+    }
+
     fn reclaim_consumed(&mut self) {
-        if self.playback_cursor >= self.base_cursor.saturating_add(self.mono.len()) {
+        if self.playback_cursor >= self.queued_dry_end() {
             self.mono.clear();
+            for bus in &mut self.buses {
+                bus.mono.clear();
+            }
             self.base_cursor = self.playback_cursor;
         }
     }
 
     fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
         self.inserts.set(inserts)
+    }
+
+    fn bus_sample_at(&self, index: usize, cursor: usize) -> f32 {
+        cursor
+            .checked_sub(self.base_cursor)
+            .and_then(|offset| self.buses.get(index).and_then(|bus| bus.mono.get(offset)))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Fill `mono_out` with folded wet samples and advance the playhead.
+    fn fold_mono(&mut self, mono_out: &mut [f32]) {
+        let n = mono_out.len();
+        for i in 0..n {
+            mono_out[i] = self.sample_at(self.playback_cursor.saturating_add(i));
+        }
+        for index in 0..MAX_BUSES {
+            if !self.buses[index].used {
+                continue;
+            }
+            let mut block = [0.0f32; CHUNK_FRAMES];
+            for i in 0..n {
+                block[i] = self.bus_sample_at(index, self.playback_cursor.saturating_add(i));
+            }
+            self.buses[index].inserts.process(&mut block[..n]);
+            for i in 0..n {
+                mono_out[i] += block[i];
+            }
+        }
+        self.inserts.process(&mut mono_out[..n]);
+        self.playback_cursor = self.playback_cursor.saturating_add(n);
     }
 
     #[cfg(test)]
@@ -124,15 +257,17 @@ impl Playback {
             return;
         }
         let n_frames = output.len() / ch;
-        for frame in 0..n_frames {
-            let sample = self.sample_at(self.playback_cursor);
-            self.playback_cursor = self.playback_cursor.saturating_add(1);
-            let base = frame * ch;
-            for c in 0..ch {
-                output[base + c] = sample;
+        let mut offset = 0;
+        while offset < n_frames {
+            let n = (n_frames - offset).min(CHUNK_FRAMES);
+            let mut mono = [0.0f32; CHUNK_FRAMES];
+            self.fold_mono(&mut mono[..n]);
+            for i in 0..n {
+                let base = (offset + i) * ch;
+                output[base..base + ch].fill(mono[i]);
             }
+            offset += n;
         }
-        apply_interleaved(&mut self.inserts, output, channels);
     }
 }
 
@@ -274,11 +409,34 @@ impl DeviceSink {
         let mut state = lock(&self.state);
         apply_interleaved(&mut state.inserts, frames, self.channels);
     }
+
+    /// Create or get an extra named bus. Same name returns the same bus.
+    pub fn ensure_bus(&mut self, name: &str) -> Result<Bus, BusError> {
+        validate_name(name)?;
+        let id = lock(&self.state).ensure_bus(name)?;
+        Ok(Bus::new(
+            id,
+            name,
+            Rc::new(DeviceBusControl {
+                state: Arc::clone(&self.state),
+            }),
+        ))
+    }
+
+    /// Mix dry PCM onto master or a named bus.
+    pub fn mix_on(
+        &mut self,
+        dest: MixDest,
+        frames: &[f32],
+        at_sample: Option<usize>,
+    ) -> Result<(), BusError> {
+        lock(&self.state).mix_dest(dest, frames, at_sample)
+    }
 }
 
 impl Sink for DeviceSink {
     fn mix(&mut self, frames: &[f32], at_sample: Option<usize>) {
-        lock(&self.state).mix(frames, at_sample);
+        let _ = lock(&self.state).mix_dest(MixDest::Master, frames, at_sample);
     }
 
     fn write(&mut self, frames: &[f32]) {
@@ -322,6 +480,19 @@ impl Sink for DeviceSink {
 
     fn apply_inserts(&mut self, frames: &mut [f32]) {
         DeviceSink::apply_inserts(self, frames)
+    }
+
+    fn ensure_bus(&mut self, name: &str) -> Result<Bus, BusError> {
+        DeviceSink::ensure_bus(self, name)
+    }
+
+    fn mix_on(
+        &mut self,
+        dest: MixDest,
+        frames: &[f32],
+        at_sample: Option<usize>,
+    ) -> Result<(), BusError> {
+        DeviceSink::mix_on(self, dest, frames, at_sample)
     }
 }
 
@@ -370,15 +541,24 @@ where
             *config,
             move |output: &mut [T], _: &OutputCallbackInfo| {
                 let mut state = lock(&state);
-                for frame in output.chunks_mut(channels) {
-                    let sample = state.sample_at(state.playback_cursor);
-                    state.playback_cursor = state.playback_cursor.saturating_add(1);
-                    let mut mono = [sample];
-                    apply_interleaved(&mut state.inserts, &mut mono, 1);
-                    let converted = T::from_sample(mono[0].clamp(-1.0, 1.0));
-                    for output_sample in frame {
-                        *output_sample = converted;
+                let n_frames = if channels == 0 {
+                    0
+                } else {
+                    output.len() / channels
+                };
+                let mut offset = 0;
+                while offset < n_frames {
+                    let n = (n_frames - offset).min(CHUNK_FRAMES);
+                    let mut mono = [0.0f32; CHUNK_FRAMES];
+                    state.fold_mono(&mut mono[..n]);
+                    for i in 0..n {
+                        let converted = T::from_sample(mono[i].clamp(-1.0, 1.0));
+                        let base = (offset + i) * channels;
+                        for output_sample in output[base..base + channels].iter_mut() {
+                            *output_sample = converted;
+                        }
                     }
+                    offset += n;
                 }
                 state.reclaim_consumed();
             },
@@ -395,6 +575,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::Playback;
+    use crate::bus::MixDest;
     use crate::insert::Insert;
 
     struct Gain {
@@ -455,6 +636,51 @@ mod tests {
         playback.mix(&[0.75], None);
         assert_eq!(playback.base_cursor, 25);
         assert_eq!(playback.mono, [0.75]);
+    }
+
+    #[test]
+    fn playback_process_output_folds_bus_then_master() {
+        let mut playback = Playback::default();
+        let drums = playback.ensure_bus("drums").unwrap();
+        playback.buses[drums.index()]
+            .inserts
+            .set(vec![Box::new(Gain { gain: 2.0 })])
+            .unwrap();
+        playback
+            .set_inserts(vec![Box::new(Gain { gain: 0.5 })])
+            .unwrap();
+        playback.mix(&[0.5], Some(0));
+        let _ = playback.mix_dest(MixDest::Bus(drums), &[0.25], Some(0));
+        let mut out = [0.0f32; 1];
+        playback.process_output(&mut out, 1);
+        // bus 0.25 * 2 = 0.5; + master 0.5 = 1.0; * master 0.5 = 0.5
+        assert_eq!(out, [0.5]);
+        assert_eq!(playback.mono, [0.5]);
+        assert_eq!(playback.buses[drums.index()].mono, [0.25]);
+    }
+
+    #[test]
+    fn playback_process_output_block_keeps_integrator_state() {
+        struct Integrator {
+            acc: f32,
+        }
+        impl Insert for Integrator {
+            fn process(&mut self, frames: &mut [f32]) {
+                for sample in frames.iter_mut() {
+                    self.acc += *sample;
+                    *sample = self.acc;
+                }
+            }
+        }
+
+        let mut playback = Playback::default();
+        playback
+            .set_inserts(vec![Box::new(Integrator { acc: 0.0 })])
+            .unwrap();
+        playback.mix(&[1.0, 1.0], Some(0));
+        let mut out = [0.0f32; 2];
+        playback.process_output(&mut out, 1);
+        assert_eq!(out, [1.0, 2.0]);
     }
 
     #[test]

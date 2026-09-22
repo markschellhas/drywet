@@ -83,8 +83,8 @@ impl fmt::Display for InsertError {
 
 impl Error for InsertError {}
 
-/// Mono frames processed per stack chunk in [`apply_interleaved`].
-const CHUNK_FRAMES: usize = 64;
+/// Mono frames processed per stack chunk in [`apply_interleaved`] and bus fold.
+pub(crate) const CHUNK_FRAMES: usize = 64;
 
 /// Apply `chain` to interleaved PCM.
 ///

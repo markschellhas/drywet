@@ -15,7 +15,8 @@ user_flow:
   synth: "App constructs Synth::new(&ctx) → trigger_attack_release(&ctx, note, duration, time); time=None mixes at write cursor"
   drum: "App calls Drum::trigger(&ctx, \"kick\"|\"snare\"|\"hat\", time); unknown names are Err; steps_per_bar((4, 4)) is 16"
   sampler: "App loads Sampler::from_directory or with_map of 16-bit WAV; missing pitches pitch-shift the nearest sample"
-  error: "Voice cap exceeded, empty sampler, or unreadable WAV → InstrumentError"
+  error: "Voice cap exceeded, empty sampler, unreadable WAV, or unknown bus → InstrumentError"
+  bus: "App calls trigger_*_on(&ctx, &bus, ...) → mix dry onto that bus; default trigger_* still mix to master"
 
 related_features:
   - context (sample rate and sink)
