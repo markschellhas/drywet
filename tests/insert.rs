@@ -4,6 +4,7 @@ use std::sync::Arc;
 use drywet::insert::{apply_interleaved, Insert, InsertChain, InsertError};
 use drywet::limits::MAX_INSERTS;
 use drywet::BufferSink;
+use drywet::Context;
 
 struct Gain {
     gain: f32,
@@ -234,4 +235,33 @@ fn buffer_apply_inserts_wets_a_copy_not_frames() {
     sink.apply_inserts(&mut wet);
     assert_eq!(wet, vec![0.5]);
     assert_eq!(sink.frames(), &[0.25]);
+}
+
+#[test]
+fn render_returns_wet_and_frames_stay_dry() {
+    let ctx = Context::new();
+    ctx.set_inserts(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    ctx.sink_mut().write(&[0.25]);
+    let wet = ctx.render(1.0 / f64::from(ctx.sample_rate())).unwrap();
+    assert_eq!(&wet[..1], &[0.5]);
+    assert_eq!(&ctx.sink().frames()[..1], &[0.25]);
+}
+
+#[test]
+fn render_without_inserts_matches_frames() {
+    let ctx = Context::new();
+    ctx.sink_mut().write(&[0.25]);
+    let pcm = ctx.render(1.0 / f64::from(ctx.sample_rate())).unwrap();
+    assert_eq!(pcm.len(), ctx.sink().frames().len());
+    assert_eq!(&pcm[..1], &ctx.sink().frames()[..1]);
+}
+
+#[test]
+fn set_inserts_after_mix_changes_next_render() {
+    let ctx = Context::new();
+    ctx.sink_mut().write(&[1.0]);
+    ctx.set_inserts(vec![boxed(Gain { gain: 0.5 })]).unwrap();
+    let wet = ctx.render(1.0 / f64::from(ctx.sample_rate())).unwrap();
+    assert_eq!(&wet[..1], &[0.5]);
+    assert_eq!(&ctx.sink().frames()[..1], &[1.0]);
 }
