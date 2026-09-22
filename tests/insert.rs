@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use drywet::insert::{apply_interleaved, Insert, InsertChain, InsertError};
 use drywet::limits::MAX_INSERTS;
-use drywet::sink::Sink;
 use drywet::BufferSink;
 
 struct Gain {
