@@ -152,3 +152,4 @@ Library only for this PRD. `drywet-engine` keeps the command list in `.features/
 - GUI hosts: `docs/reference/gui.md`
 - Heritage maps: [drywet-py `.features/`](https://github.com/markschellhas/drywet-py/tree/master/.features) (same door names; reference only)
 - Implementation plan (mix/sink already shipped): `docs/plans/2026-09-20-drywet.md`
+- Implementation plan (this PRD): `docs/plans/2026-09-22-playback-insert.md`
