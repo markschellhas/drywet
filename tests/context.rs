@@ -1,4 +1,3 @@
-use drywet::sink::Sink;
 use drywet::transport::TransportState;
 use drywet::{BufferSink, Context};
 
