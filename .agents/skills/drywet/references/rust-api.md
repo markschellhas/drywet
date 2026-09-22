@@ -5,7 +5,7 @@ Matches `src/` and `tests/` on this repo. Crate version `0.1.0`.
 ## Crate root re-exports
 
 ```rust
-drywet::{VERSION, Context, run, Loop, Part, Sequence, Drum, Sampler, Synth, BufferSink, PipeWireSink, Sink, Insert, InsertChain, InsertError}
+drywet::{VERSION, Context, run, Loop, Part, Sequence, Drum, Sampler, Synth, BufferSink, PipeWireSink, Sink, Insert, InsertChain, InsertError, Bus, BusError, BusId, MixDest}
 ```
 
 Everything else is namespaced: `drywet::transport`, `drywet::event`, `drywet::time`, `drywet::pitch`, `drywet::limits`, `drywet::instrument`.
@@ -24,7 +24,8 @@ ctx.transport() -> TransportRef<'_, S>
 ctx.to_seconds(impl IntoTime) -> Result<f64, TimeError>
 ctx.set_inserts(impl IntoIterator<Item = Box<dyn Insert>>) -> Result<(), InsertError>
 ctx.clear_inserts() -> Result<(), InsertError>
-ctx.render(impl IntoTime) -> Result<Vec<f32>, TransportError>  // wet copy; sink.frames() stay dry
+ctx.bus("drums") -> Result<Bus, BusError>           // create-or-get; "master" is InvalidName
+ctx.render(impl IntoTime) -> Result<Vec<f32>, TransportError>  // buses folded + wet copy; sink.frames() stay dry master
 ```
 
 Default `Context` is `Context<BufferSink>`. Live Linux:
@@ -86,11 +87,13 @@ BBS: `bars:beats:sixteenths` (sixteenths may be fractional).
 
 ## Instruments
 
-All mix onto `ctx.sink`. Shared pattern:
+All mix onto `ctx.sink` (master) unless `_on` is used. Shared pattern:
 
 ```rust
 inst.trigger_attack(&ctx, note, time)
 inst.trigger_attack_release(&ctx, note, duration, time)
+inst.trigger_attack_on(&ctx, &bus, note, time)
+inst.trigger_attack_release_on(&ctx, &bus, note, duration, time)
 inst.trigger_release(note, time)   // voice count only; PCM already mixed
 inst.release_all(time)
 ```
@@ -119,7 +122,9 @@ sampler.loop_flag()                  // stored; held-loop mixer not implemented
 
 WAV: RIFF/WAVE, PCM format 1, 16-bit. Stereo frames averaged to mono. Rate mismatch linear-resampled to context rate.
 
-`InstrumentError`: `VoiceLimitExceeded`, `UnknownDrum`, `Pitch`, `Time`, `InvalidWav`, `EmptySampler`.
+`InstrumentError`: `VoiceLimitExceeded`, `UnknownDrum`, `Pitch`, `Time`, `InvalidWav`, `EmptySampler`, `Bus`.
+
+Drum also has `trigger_on(&ctx, &bus, name, time)`.
 
 ## Sequence / Part / Loop
 
@@ -153,6 +158,9 @@ trait Sink {
     fn accepted(&self) -> bool;
     fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError>;
     fn apply_inserts(&mut self, frames: &mut [f32]);
+    fn ensure_bus(&mut self, name: &str) -> Result<Bus, BusError>;
+    fn mix_on(&mut self, dest: MixDest, frames: &[f32], at_sample: Option<usize>) -> Result<(), BusError>;
+    fn fold_into(&mut self, frames: &mut Vec<f32>);
     fn mark_accepted(&mut self);
     fn start_clock(&mut self);
     fn frames(&self) -> &[f32];
@@ -161,7 +169,7 @@ trait Sink {
 
 `BufferSink::new(sample_rate, channels)` — expanding f32 buffer. Stereo duplicates each mono frame. `to_pcm_s16le()` clips to [-1, 1] and packs LE i16. `stop`/`close` are no-ops.
 
-`mix` at `Some(at)` does not advance the write cursor. `write` mixes at the cursor and advances. Tails sum. Mix and write never run inserts. Defaults for `set_inserts` / `apply_inserts` are no-ops; BufferSink, PipeWireSink, and DeviceSink override.
+`mix` at `Some(at)` does not advance the write cursor. `write` mixes at the cursor and advances. Tails sum. Mix and write never run inserts. Defaults for `set_inserts` / `apply_inserts` are no-ops; BufferSink, PipeWireSink, and DeviceSink override. `mix_on` routes dry PCM to master or a named bus. `fold_into` sums processed buses into a master-dry copy, then runs master inserts.
 
 ## Inserts
 
@@ -178,6 +186,17 @@ ctx.set_inserts(vec![Box::new(my_insert) as Box<dyn drywet::Insert>])?
 
 Chain order is playback order. Mix stays dry. `render` / `PipeWireSink::process` / the DeviceSink callback run the chain. Empty chain is identity.
 
+## Buses
+
+```rust
+let drums = ctx.bus("drums")?;                      // create or get; stable for the Context
+drums.set_inserts(vec![Box::new(my_insert) as Box<dyn drywet::Insert>])?;
+drums.clear_inserts()?;
+sampler.trigger_attack_on(&ctx, &drums, "C4", Some(time.into()))?;
+```
+
+`BusError`: `BusFull { max, got }`, `InvalidName` (`""` or `"master"`), `UnknownBus`. Extra buses cap at `MAX_BUSES` (not counting master). Dropping the handle does not destroy the bus. Default `trigger_*` still mix to master.
+
 ## Limits (`drywet::limits`)
 
 | Constant | Value |
@@ -191,6 +210,7 @@ Chain order is playback order. Mix stays dry. `render` / `PipeWireSink::process`
 | `DEFAULT_MAX_VOICES` | 32 |
 | `MAX_SCHEDULE_SECONDS` | 600 |
 | `MAX_INSERTS` | 8 |
+| `MAX_BUSES` | 8 extra named buses (not counting master) |
 
 ## Engine helper
 

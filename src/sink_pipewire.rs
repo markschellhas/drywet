@@ -5,10 +5,12 @@
 //! in a preallocated slot + command table on the control thread; the process
 //! callback only copies and sums into a caller-provided output buffer.
 
-use std::sync::Mutex;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
-use crate::insert::{apply_interleaved, Insert, InsertChain, InsertError};
-use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
+use crate::bus::{validate_name, Bus, BusControl, BusError, BusId, BusTable, MixDest};
+use crate::insert::{apply_interleaved, Insert, InsertChain, InsertError, CHUNK_FRAMES};
+use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE, MAX_BUSES};
 
 /// Default period size in sample frames when no backend quantum is injected.
 pub const DEFAULT_QUANTUM_FRAMES: usize = 256;
@@ -157,6 +159,25 @@ struct MixCmd {
     at: usize,
     len: usize,
     slot: usize,
+    dest: MixDest,
+}
+
+struct PipeWireBusControl {
+    mix: Arc<Mutex<MixStorage>>,
+}
+
+impl BusControl for PipeWireBusControl {
+    fn set_inserts(&self, id: BusId, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        let mut mix = self
+            .mix
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(slot) = mix.buses.get_mut(id) {
+            slot.data.set(inserts)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Fixed-capacity mix table. Enqueue copies PCM into a slot; render only reads.
@@ -172,6 +193,7 @@ struct MixStorage {
     occupied: [bool; SLOT_COUNT],
     playback: usize,
     inserts: InsertChain,
+    buses: BusTable<InsertChain>,
 }
 
 impl MixStorage {
@@ -182,6 +204,7 @@ impl MixStorage {
             occupied: [false; SLOT_COUNT],
             playback: 0,
             inserts: InsertChain::new(),
+            buses: BusTable::new(),
         }
     }
 
@@ -205,7 +228,7 @@ impl MixStorage {
         None
     }
 
-    fn enqueue(&mut self, frames: &[f32], at: usize) {
+    fn enqueue(&mut self, frames: &[f32], at: usize, dest: MixDest) {
         let mut offset = 0;
         while offset < frames.len() {
             let n = (frames.len() - offset).min(SLOT_FRAMES);
@@ -218,13 +241,16 @@ impl MixStorage {
                 at: at.saturating_add(offset),
                 len: n,
                 slot,
+                dest,
             };
             self.occupied[slot] = true;
             offset += n;
         }
     }
 
-    /// Sum overlapping slot PCM into `output`. No heap, no I/O, no formatting.
+    /// Sum overlapping slot PCM per destination, fold buses, then master inserts.
+    ///
+    /// No heap, no I/O, no formatting. Processes in [`CHUNK_FRAMES`] stacks.
     fn render(&mut self, output: &mut [f32], channels: usize) {
         for sample in output.iter_mut() {
             *sample = 0.0;
@@ -236,35 +262,64 @@ impl MixStorage {
         let start = self.playback;
         let end = start.saturating_add(n_frames);
 
+        let mut frame = 0;
+        while frame < n_frames {
+            let n = (n_frames - frame).min(CHUNK_FRAMES);
+            let chunk_start = start.saturating_add(frame);
+            let chunk_end = chunk_start.saturating_add(n);
+            let mut master = [0.0f32; CHUNK_FRAMES];
+            let mut bus_blocks = [[0.0f32; CHUNK_FRAMES]; MAX_BUSES];
+
+            for i in 0..SLOT_COUNT {
+                if !self.occupied[i] {
+                    continue;
+                }
+                let cmd = self.cmds[i];
+                let cmd_end = cmd.at.saturating_add(cmd.len);
+                if cmd_end <= chunk_start || cmd.at >= chunk_end {
+                    continue;
+                }
+                let mix_from = cmd.at.max(chunk_start);
+                let mix_to = cmd_end.min(chunk_end);
+                let slot_base = cmd.slot * SLOT_FRAMES;
+                let dest = match cmd.dest {
+                    MixDest::Master => &mut master[..],
+                    MixDest::Bus(id) => &mut bus_blocks[id.index()][..],
+                };
+                for sample_frame in mix_from..mix_to {
+                    dest[sample_frame - chunk_start] +=
+                        self.slots[slot_base + (sample_frame - cmd.at)];
+                }
+            }
+
+            for (id, slot) in self.buses.iter_mut() {
+                let block = &mut bus_blocks[id.index()][..n];
+                slot.data.process(block);
+                for i in 0..n {
+                    master[i] += block[i];
+                }
+            }
+            self.inserts.process(&mut master[..n]);
+
+            for i in 0..n {
+                let sample = master[i];
+                let base = (frame + i) * channels;
+                for ch in 0..channels {
+                    output[base + ch] = sample;
+                }
+            }
+            frame += n;
+        }
+
         for i in 0..SLOT_COUNT {
             if !self.occupied[i] {
                 continue;
             }
-            let cmd = self.cmds[i];
-            let cmd_end = cmd.at.saturating_add(cmd.len);
-            if cmd_end <= start {
-                self.occupied[i] = false;
-                continue;
-            }
-            if cmd.at >= end {
-                continue;
-            }
-            let mix_from = cmd.at.max(start);
-            let mix_to = cmd_end.min(end);
-            let slot_base = cmd.slot * SLOT_FRAMES;
-            for frame in mix_from..mix_to {
-                let src = self.slots[slot_base + (frame - cmd.at)];
-                let base = (frame - start) * channels;
-                for ch in 0..channels {
-                    output[base + ch] += src;
-                }
-            }
+            let cmd_end = self.cmds[i].at.saturating_add(self.cmds[i].len);
             if cmd_end <= end {
                 self.occupied[i] = false;
             }
         }
-
-        apply_interleaved(&mut self.inserts, output, channels as u16);
 
         self.playback = end;
     }
@@ -287,7 +342,7 @@ pub struct PipeWireSink<B: StreamBackend = MockStream> {
     channels: u16,
     write_cursor: usize,
     accepted: bool,
-    mix: Mutex<MixStorage>,
+    mix: Arc<Mutex<MixStorage>>,
     backend: B,
 }
 
@@ -316,7 +371,7 @@ impl<B: StreamBackend> PipeWireSink<B> {
             channels,
             write_cursor: 0,
             accepted: false,
-            mix: Mutex::new(MixStorage::new()),
+            mix: Arc::new(Mutex::new(MixStorage::new())),
             backend,
         }
     }
@@ -429,7 +484,57 @@ impl<B: StreamBackend> PipeWireSink<B> {
         self.mix
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .enqueue(frames, at);
+            .enqueue(frames, at, MixDest::Master);
+    }
+
+    /// Create or get an extra named bus. Same name returns the same bus.
+    pub fn ensure_bus(&mut self, name: &str) -> Result<Bus, BusError> {
+        validate_name(name)?;
+        let id = self
+            .mix
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .buses
+            .ensure(name)?;
+        Ok(Bus::new(
+            id,
+            name,
+            Rc::new(PipeWireBusControl {
+                mix: Arc::clone(&self.mix),
+            }),
+        ))
+    }
+
+    /// Mix dry PCM onto master or a named bus.
+    pub fn mix_on(
+        &mut self,
+        dest: MixDest,
+        frames: &[f32],
+        at_sample: Option<usize>,
+    ) -> Result<(), BusError> {
+        match dest {
+            MixDest::Master => {
+                PipeWireSink::mix(self, frames, at_sample);
+                Ok(())
+            }
+            MixDest::Bus(id) => {
+                let at = at_sample.unwrap_or(self.write_cursor);
+                {
+                    let mut mix = self
+                        .mix
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if mix.buses.get(id).is_none() {
+                        return Err(BusError::UnknownBus);
+                    }
+                    if !frames.is_empty() {
+                        mix.enqueue(frames, at, MixDest::Bus(id));
+                    }
+                }
+                self.accepted = true;
+                Ok(())
+            }
+        }
     }
 
     /// Replace the playback insert chain. Mix and enqueue stay dry.
@@ -498,5 +603,18 @@ impl<B: StreamBackend> crate::sink::Sink for PipeWireSink<B> {
 
     fn apply_inserts(&mut self, frames: &mut [f32]) {
         PipeWireSink::apply_inserts(self, frames)
+    }
+
+    fn ensure_bus(&mut self, name: &str) -> Result<Bus, BusError> {
+        PipeWireSink::ensure_bus(self, name)
+    }
+
+    fn mix_on(
+        &mut self,
+        dest: MixDest,
+        frames: &[f32],
+        at_sample: Option<usize>,
+    ) -> Result<(), BusError> {
+        PipeWireSink::mix_on(self, dest, frames, at_sample)
     }
 }

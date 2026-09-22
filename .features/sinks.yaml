@@ -6,6 +6,7 @@ entry_points:
   - src/sink_device.rs
   - src/sink_pipewire.rs
   - src/insert.rs
+  - src/bus.rs
   - examples/metronome.rs
 
 apps:
@@ -18,6 +19,7 @@ core_components:
   PipeWireSink: src/sink_pipewire.rs
   Insert: src/insert.rs
   InsertChain: src/insert.rs
+  Bus: src/bus.rs
   example_device_context: examples/support/mod.rs
 
 user_flow:
@@ -25,6 +27,7 @@ user_flow:
   live: "App opens DeviceSink::new() → Context::with(negotiated rate/channels, sink) → play() then wait_until_end()"
   pipewire: "PipeWireSink::new injects MockStream; a real device uses PipeWireSink::with_backend"
   insert: "App calls ctx.set_inserts(...) → mix/write stay dry; render/process/callback run the chain"
+  bus: "App calls ctx.bus(\"drums\") → extra dry store + insert chain; output folds buses then master inserts"
 
 related_features:
   - context (owns the sink)
@@ -33,6 +36,7 @@ related_features:
   - engine (DeviceSink default; BufferSink via --buffer)
 
 notes: >
-  Instruments mix onto the Context sink; there is no node graph. Playback inserts
-  run at output, not inside mix. cargo test uses BufferSink only. Live PipeWire
-  tests are ignored unless DRYWET_LIVE_AUDIO=1.
+  Instruments mix onto the Context sink or a named bus; there is no node graph.
+  Playback inserts run at output, not inside mix. Extra buses are flat into master.
+  cargo test uses BufferSink only. Live PipeWire tests are ignored unless
+  DRYWET_LIVE_AUDIO=1.

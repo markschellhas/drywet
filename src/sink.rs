@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use crate::bus::{mix_mono, validate_name, Bus, BusControl, BusError, BusId, BusTable, MixDest};
 use crate::insert::{apply_interleaved, Insert, InsertChain, InsertError};
 use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 
@@ -48,6 +52,35 @@ pub trait Sink {
         let _ = frames;
     }
 
+    /// Create or get an extra named bus. Default is [`BusError::UnknownBus`].
+    fn ensure_bus(&mut self, name: &str) -> Result<Bus, BusError> {
+        let _ = name;
+        Err(BusError::UnknownBus)
+    }
+
+    /// Mix dry PCM onto master or a named bus.
+    fn mix_on(
+        &mut self,
+        dest: MixDest,
+        frames: &[f32],
+        at_sample: Option<usize>,
+    ) -> Result<(), BusError> {
+        match dest {
+            MixDest::Master => {
+                self.mix(frames, at_sample);
+                Ok(())
+            }
+            MixDest::Bus(_) => Err(BusError::UnknownBus),
+        }
+    }
+
+    /// Fold extra buses into a master-dry copy, then run master inserts.
+    ///
+    /// Default is [`Self::apply_inserts`]. May grow `frames` to cover bus tails.
+    fn fold_into(&mut self, frames: &mut Vec<f32>) {
+        self.apply_inserts(frames);
+    }
+
     /// Mark the destination as accepted. Default is a no-op.
     ///
     /// [`crate::transport::TransportRef::start`] uses this so BufferSink
@@ -68,6 +101,26 @@ pub trait Sink {
     }
 }
 
+#[derive(Debug, Default)]
+struct BufferBusData {
+    buf: Vec<f32>,
+    inserts: InsertChain,
+}
+
+struct BufferBusControl {
+    buses: Rc<RefCell<BusTable<BufferBusData>>>,
+}
+
+impl BusControl for BufferBusControl {
+    fn set_inserts(&self, id: BusId, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        if let Some(slot) = self.buses.borrow_mut().get_mut(id) {
+            slot.data.inserts.set(inserts)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// In-memory expanding f32 buffer for tests and offline render.
 ///
 /// `frames` is a mono sample list. When `channels > 1`, each sample is
@@ -80,6 +133,7 @@ pub struct BufferSink {
     write_cursor: usize,
     accepted: bool,
     inserts: InsertChain,
+    buses: Rc<RefCell<BusTable<BufferBusData>>>,
 }
 
 impl BufferSink {
@@ -92,6 +146,7 @@ impl BufferSink {
             write_cursor: 0,
             accepted: false,
             inserts: InsertChain::new(),
+            buses: Rc::new(RefCell::new(BusTable::new())),
         }
     }
 
@@ -158,6 +213,74 @@ impl BufferSink {
 
     /// Apply the insert chain to `frames`. Does not rewrite the dry buffer.
     pub fn apply_inserts(&mut self, frames: &mut [f32]) {
+        apply_interleaved(&mut self.inserts, frames, self.channels);
+    }
+
+    /// Create or get an extra named bus. Same name returns the same bus.
+    pub fn ensure_bus(&mut self, name: &str) -> Result<Bus, BusError> {
+        validate_name(name)?;
+        let id = self.buses.borrow_mut().ensure(name)?;
+        Ok(Bus::new(
+            id,
+            name,
+            Rc::new(BufferBusControl {
+                buses: Rc::clone(&self.buses),
+            }),
+        ))
+    }
+
+    /// Mix dry PCM onto master or a named bus.
+    pub fn mix_on(
+        &mut self,
+        dest: MixDest,
+        frames: &[f32],
+        at_sample: Option<usize>,
+    ) -> Result<(), BusError> {
+        match dest {
+            MixDest::Master => {
+                BufferSink::mix(self, frames, at_sample);
+                Ok(())
+            }
+            MixDest::Bus(id) => {
+                let at = at_sample.unwrap_or(self.write_cursor);
+                let mut buses = self.buses.borrow_mut();
+                let slot = buses.get_mut(id).ok_or(BusError::UnknownBus)?;
+                mix_mono(&mut slot.data.buf, frames, at);
+                self.accepted = true;
+                Ok(())
+            }
+        }
+    }
+
+    /// Fold extra buses into `frames`, then run master inserts.
+    pub fn fold_into(&mut self, frames: &mut Vec<f32>) {
+        let channels = usize::from(self.channels.max(1));
+        let mut buses = self.buses.borrow_mut();
+        let mut max_frames = frames.len() / channels;
+        for (_, slot) in buses.iter() {
+            max_frames = max_frames.max(slot.data.buf.len());
+        }
+        let needed = max_frames.saturating_mul(channels);
+        if frames.len() < needed {
+            frames.resize(needed, 0.0);
+        }
+        let n_frames = frames.len() / channels;
+        for (_, slot) in buses.iter_mut() {
+            let mut wet = slot.data.buf.clone();
+            if wet.len() < n_frames {
+                wet.resize(n_frames, 0.0);
+            } else {
+                wet.truncate(n_frames);
+            }
+            slot.data.inserts.process(&mut wet);
+            for frame in 0..n_frames {
+                let sample = wet[frame];
+                let base = frame * channels;
+                for ch in 0..channels {
+                    frames[base + ch] += sample;
+                }
+            }
+        }
         apply_interleaved(&mut self.inserts, frames, self.channels);
     }
 
@@ -237,5 +360,22 @@ impl Sink for BufferSink {
 
     fn apply_inserts(&mut self, frames: &mut [f32]) {
         BufferSink::apply_inserts(self, frames)
+    }
+
+    fn ensure_bus(&mut self, name: &str) -> Result<Bus, BusError> {
+        BufferSink::ensure_bus(self, name)
+    }
+
+    fn mix_on(
+        &mut self,
+        dest: MixDest,
+        frames: &[f32],
+        at_sample: Option<usize>,
+    ) -> Result<(), BusError> {
+        BufferSink::mix_on(self, dest, frames, at_sample)
+    }
+
+    fn fold_into(&mut self, frames: &mut Vec<f32>) {
+        BufferSink::fold_into(self, frames)
     }
 }
