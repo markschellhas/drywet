@@ -7,15 +7,21 @@
 use std::cell::RefCell;
 use std::io::{BufRead, Write};
 use std::rc::Rc;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::context::Context;
 use crate::event::{Loop, Part, Sequence, SequenceEvent};
 use crate::instrument::{Drum, Sampler, Synth};
-use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
+use crate::limits::{
+    DEFAULT_CHANNELS, DEFAULT_LOOKAHEAD_S, DEFAULT_SAMPLE_RATE, MAX_SCHEDULE_SECONDS,
+};
 use crate::sink::Sink;
 use crate::time::TimeValue;
+use crate::transport::TransportState;
 
 /// Selected warmup instrument. Sequence callbacks share this via `Rc<RefCell<_>>`.
 enum LiveInstrument {
@@ -254,10 +260,99 @@ fn apply_transport_loop<S: Sink>(ctx: &Context<S>, msg: &Value) {
     }
 }
 
+fn has_schedule(msg: &Value) -> bool {
+    msg.get("sequence").and_then(Value::as_object).is_some()
+        || msg.get("part").and_then(Value::as_object).is_some()
+        || msg.get("loop").and_then(Value::as_object).is_some()
+}
+
+fn sequence_length_s<S: Sink>(ctx: &Context<S>, spec: &Map<String, Value>) -> Result<f64, String> {
+    let n = spec
+        .get("events")
+        .and_then(Value::as_array)
+        .map(|events| events.len())
+        .unwrap_or(0);
+    let subdivision = spec
+        .get("subdivision")
+        .and_then(Value::as_str)
+        .unwrap_or("4n");
+    let slot = ctx.to_seconds(subdivision).map_err(err_str)?;
+    Ok(slot * n as f64)
+}
+
+fn part_length_s<S: Sink>(ctx: &Context<S>, spec: &Map<String, Value>) -> Result<f64, String> {
+    let events = parse_part_events(spec.get("events").unwrap_or(&json!([])))?;
+    let mut times = Vec::with_capacity(events.len());
+    for (time, _) in &events {
+        times.push(ctx.to_seconds(time.clone()).map_err(err_str)?);
+    }
+    let max = times.iter().copied().fold(0.0_f64, f64::max);
+    if max <= 0.0 {
+        return ctx.to_seconds("4n").map_err(err_str);
+    }
+    let mut sorted = times;
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let mut gap = f64::INFINITY;
+    for window in sorted.windows(2) {
+        let delta = window[1] - window[0];
+        if delta > 0.0 {
+            gap = gap.min(delta);
+        }
+    }
+    if !gap.is_finite() {
+        gap = ctx.to_seconds("4n").map_err(err_str)?;
+    }
+    Ok(max + gap)
+}
+
+fn apply_phrase_loop_points<S: Sink>(ctx: &Context<S>, msg: &Value) -> Result<(), String> {
+    if !matches!(msg.get("loop"), Some(Value::Bool(true))) {
+        return Ok(());
+    }
+    let mut length = 0.0;
+    if let Some(spec) = msg.get("sequence").and_then(Value::as_object) {
+        length = length.max(sequence_length_s(ctx, spec)?);
+    }
+    if let Some(spec) = msg.get("part").and_then(Value::as_object) {
+        length = length.max(part_length_s(ctx, spec)?);
+    }
+    if length > 0.0 {
+        ctx.transport()
+            .set_loop_points(0.0, length)
+            .map_err(err_str)?;
+    }
+    Ok(())
+}
+
+fn start_horizon<S: Sink>(ctx: &Context<S>, msg: &Value) -> Result<Option<f64>, String> {
+    if !has_schedule(msg) {
+        return Ok(None);
+    }
+    let mut horizon = 0.0;
+    if let Some(spec) = msg.get("sequence").and_then(Value::as_object) {
+        horizon = horizon.max(sequence_length_s(ctx, spec)?);
+    }
+    if let Some(spec) = msg.get("part").and_then(Value::as_object) {
+        horizon = horizon.max(part_length_s(ctx, spec)?);
+    }
+    if let Some(spec) = msg.get("loop").and_then(Value::as_object) {
+        let interval = spec.get("interval").and_then(Value::as_str).unwrap_or("4n");
+        horizon = horizon.max(ctx.to_seconds(interval).map_err(err_str)?);
+    }
+    if matches!(msg.get("loop"), Some(Value::Bool(true))) {
+        horizon *= 2.0;
+    }
+    if horizon <= 0.0 {
+        horizon = DEFAULT_LOOKAHEAD_S;
+    }
+    Ok(Some(horizon.min(MAX_SCHEDULE_SECONDS)))
+}
+
 fn attach_schedule<S: Sink + 'static>(
     ctx: &Rc<Context<S>>,
     inst: &Rc<RefCell<LiveInstrument>>,
     msg: &Value,
+    origin_s: f64,
 ) -> Result<(), String> {
     if let Some(spec) = msg.get("sequence").and_then(Value::as_object) {
         let events = parse_sequence_events(spec.get("events").unwrap_or(&json!([])))?;
@@ -270,11 +365,12 @@ fn attach_schedule<S: Sink + 'static>(
         let mut sequence = Sequence::new(
             move |time, note| {
                 if let Some(note) = note {
+                    let mix = ctx_cb.live_mix_time(origin_s, time);
                     let _ = inst_cb.borrow_mut().trigger_attack_release(
                         ctx_cb.as_ref(),
                         note,
                         TimeValue::from("8n"),
-                        Some(TimeValue::from(time)),
+                        mix,
                     );
                 }
             },
@@ -290,11 +386,12 @@ fn attach_schedule<S: Sink + 'static>(
         let inst_cb = Rc::clone(inst);
         let mut part = Part::new(
             move |time, note| {
+                let mix = ctx_cb.live_mix_time(origin_s, time);
                 let _ = inst_cb.borrow_mut().trigger_attack_release(
                     ctx_cb.as_ref(),
                     note,
                     TimeValue::from("8n"),
-                    Some(TimeValue::from(time)),
+                    mix,
                 );
             },
             events,
@@ -308,11 +405,12 @@ fn attach_schedule<S: Sink + 'static>(
         let inst_cb = Rc::clone(inst);
         let mut looper = Loop::new(
             move |time| {
+                let mix = ctx_cb.live_mix_time(origin_s, time);
                 let _ = inst_cb.borrow_mut().trigger_attack_release(
                     ctx_cb.as_ref(),
                     "C4",
                     TimeValue::from("8n"),
-                    Some(TimeValue::from(time)),
+                    mix,
                 );
             },
             interval,
@@ -321,6 +419,12 @@ fn attach_schedule<S: Sink + 'static>(
     }
 
     Ok(())
+}
+
+fn pump_tick<S: Sink>(ctx: &Context<S>) {
+    if ctx.transport().state() == TransportState::Started {
+        let _ = ctx.tick(DEFAULT_LOOKAHEAD_S);
+    }
 }
 
 fn unknown_cmd(msg: &Value) -> String {
@@ -339,10 +443,14 @@ fn ensure_clock<S: Sink>(ctx: &Context<S>) {
 ///
 /// Returns the context so in-process tests can inspect the sink after `run`.
 /// `shutdown` disposes the transport and returns; EOF also returns without dispose.
+///
+/// While Transport is Started, the process ticks [`DEFAULT_LOOKAHEAD_S`] on a
+/// stdin timeout so an idle QML host still hears the arrangement. Context
+/// stays on this thread; a reader thread only moves JSON lines.
 pub fn run<S, R, W>(stdin: R, stdout: W, sink: S) -> std::io::Result<Rc<Context<S>>>
 where
     S: Sink + 'static,
-    R: BufRead,
+    R: BufRead + Send + 'static,
     W: Write,
 {
     run_with_config(stdin, stdout, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS, sink)
@@ -363,7 +471,7 @@ pub fn run_with_config<S, R, W>(
 ) -> std::io::Result<Rc<Context<S>>>
 where
     S: Sink + 'static,
-    R: BufRead,
+    R: BufRead + Send + 'static,
     W: Write,
 {
     let ctx = Rc::new(Context::with(sample_rate, channels, sink));
@@ -372,58 +480,94 @@ where
     ))));
     let mut stdout = stdout;
 
-    for line in stdin.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in stdin.lines() {
+            if tx.send(line).is_err() {
+                break;
+            }
         }
-        let msg: Value = match serde_json::from_str(&line) {
-            Ok(value) => value,
-            Err(err) => {
-                emit_error(&mut stdout, err)?;
-                continue;
-            }
-        };
-        if !msg.is_object() {
-            emit_error(&mut stdout, "command must be a JSON object")?;
-            continue;
-        }
+    });
 
-        let cmd = msg.get("cmd").and_then(Value::as_str);
-        let result = match cmd {
-            Some("warmup") => handle_warmup(&ctx, &instrument, &msg),
-            Some("start") => handle_start(&ctx, &instrument, &msg),
-            Some("stop") => {
-                ctx.transport().stop();
-                Ok(json!({"ok": true}))
+    let timeout = Duration::from_secs_f64(DEFAULT_LOOKAHEAD_S);
+    loop {
+        match rx.recv_timeout(timeout) {
+            Ok(Ok(line)) => {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match dispatch_line(&ctx, &instrument, &mut stdout, &line)? {
+                    Dispatch::Continue => pump_tick(ctx.as_ref()),
+                    Dispatch::Shutdown => return Ok(ctx),
+                }
             }
-            Some("pause") => {
-                ctx.transport().pause();
-                Ok(json!({"ok": true}))
-            }
-            Some("resume") => {
-                ctx.transport().start();
-                Ok(json!({"ok": true}))
-            }
-            Some("play-midi") => handle_play_midi(&ctx, &instrument, &msg),
-            Some("note-on") | Some("trigger_attack") => handle_note_on(&ctx, &instrument, &msg),
-            Some("note-off") | Some("trigger_release") => handle_note_off(&instrument, &msg),
-            Some("bpm") => handle_bpm(&ctx, &msg),
-            Some("shutdown") => {
-                ctx.transport().dispose();
-                emit_ok(&mut stdout)?;
-                return Ok(ctx);
-            }
-            _ => Err(unknown_cmd(&msg)),
-        };
-
-        match result {
-            Ok(reply) => emit(&mut stdout, &reply)?,
-            Err(err) => emit_error(&mut stdout, err)?,
+            Ok(Err(err)) => return Err(err),
+            Err(RecvTimeoutError::Timeout) => pump_tick(ctx.as_ref()),
+            Err(RecvTimeoutError::Disconnected) => return Ok(ctx),
         }
     }
+}
 
-    Ok(ctx)
+enum Dispatch {
+    Continue,
+    Shutdown,
+}
+
+fn dispatch_line<S, W>(
+    ctx: &Rc<Context<S>>,
+    instrument: &Rc<RefCell<LiveInstrument>>,
+    stdout: &mut W,
+    line: &str,
+) -> std::io::Result<Dispatch>
+where
+    S: Sink + 'static,
+    W: Write,
+{
+    let msg: Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(err) => {
+            emit_error(stdout, err)?;
+            return Ok(Dispatch::Continue);
+        }
+    };
+    if !msg.is_object() {
+        emit_error(stdout, "command must be a JSON object")?;
+        return Ok(Dispatch::Continue);
+    }
+
+    let cmd = msg.get("cmd").and_then(Value::as_str);
+    let result = match cmd {
+        Some("warmup") => handle_warmup(ctx, instrument, &msg),
+        Some("start") => handle_start(ctx, instrument, &msg),
+        Some("stop") => {
+            ctx.transport().stop();
+            Ok(json!({"ok": true}))
+        }
+        Some("pause") => {
+            ctx.transport().pause();
+            Ok(json!({"ok": true}))
+        }
+        Some("resume") => {
+            ctx.transport().start();
+            Ok(json!({"ok": true}))
+        }
+        Some("play-midi") => handle_play_midi(ctx, instrument, &msg),
+        Some("note-on") | Some("trigger_attack") => handle_note_on(ctx, instrument, &msg),
+        Some("note-off") | Some("trigger_release") => handle_note_off(instrument, &msg),
+        Some("bpm") => handle_bpm(ctx, &msg),
+        Some("shutdown") => {
+            ctx.transport().dispose();
+            emit_ok(stdout)?;
+            return Ok(Dispatch::Shutdown);
+        }
+        _ => Err(unknown_cmd(&msg)),
+    };
+
+    match result {
+        Ok(reply) => emit(stdout, &reply)?,
+        Err(err) => emit_error(stdout, err)?,
+    }
+    Ok(Dispatch::Continue)
 }
 
 fn handle_warmup<S: Sink>(
@@ -433,7 +577,6 @@ fn handle_warmup<S: Sink>(
 ) -> Result<Value, String> {
     let next = LiveInstrument::from_msg(ctx.as_ref(), msg)?;
     *instrument.borrow_mut() = next;
-    ensure_clock(ctx.as_ref());
     Ok(json!({"ok": true}))
 }
 
@@ -446,10 +589,17 @@ fn handle_start<S: Sink + 'static>(
         ctx.transport().set_bpm(json_f64(bpm)?).map_err(err_str)?;
     }
     apply_transport_loop(ctx.as_ref(), msg);
-    attach_schedule(ctx, instrument, msg)?;
-    ensure_clock(ctx.as_ref());
+    apply_phrase_loop_points(ctx.as_ref(), msg)?;
+    let origin_s = ctx.live_origin();
+    attach_schedule(ctx, instrument, msg, origin_s)?;
     let mut transport = ctx.transport();
     transport.start();
+    drop(transport);
+    if let Some(horizon) = start_horizon(ctx.as_ref(), msg)? {
+        ctx.transport().fire_until(horizon).map_err(err_str)?;
+    }
+    ensure_clock(ctx.as_ref());
+    let transport = ctx.transport();
     Ok(json!({
         "event": "started",
         "latencyMs": transport.latency_ms(),

@@ -1,5 +1,5 @@
 feature_name: transport
-purpose: "The arrangement clock: start/stop/pause/toggle, tempo, loop points, playhead, schedule APIs, and fire_until."
+purpose: "The arrangement clock: start/stop/pause/toggle, tempo, loop points, playhead, schedule APIs, fire_until, and tick."
 
 entry_points:
   - src/transport.rs
@@ -12,7 +12,7 @@ apps:
 user_flow:
   primary: "App calls ctx.transport().start() → state started, sink marked accepted, seconds reset to 0 from stopped"
   tempo: "App writes bpm 40–240; a write while started applies on the next start from stopped"
-  schedule: "App registers schedule / schedule_repeat callbacks that receive sample time; fire_until or ctx.render runs them"
+  schedule: "App registers schedule / schedule_repeat callbacks that receive sample time; tick is the live driver (fire_until(seconds+lookahead)); start() is not; ctx.render is the offline driver"
   stop: "App calls stop() → arrangement clock stops and sink.stop() without close; dispose() also closes the sink"
 
 related_features:
@@ -24,4 +24,5 @@ related_features:
 
 notes: >
   ctx.transport() is a short-lived TransportRef. PPQ 192. MAX_SCHEDULE_SECONDS 600.
-  Language timers are not the clock.
+  DEFAULT_LOOKAHEAD_S 0.04. Language timers are not the clock. tick while
+  Stopped/Paused is a no-op.

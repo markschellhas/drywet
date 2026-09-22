@@ -16,7 +16,7 @@ ctx.sink_mut().play()?;
 synth.trigger_attack_release(&ctx, "C4", "8n", None)?;
 ```
 
-For scheduled callbacks, use `Rc<RefCell<_>>` around the instrument and capture the context as shown in [Scheduling](scheduling.md). Avoid moving `Context`, instruments, or schedulers between GUI threads.
+For scheduled callbacks, use `Rc<RefCell<_>>` around the instrument and capture the context as shown in [Scheduling](scheduling.md). The GUI frame loop must call `ctx.tick(0.04)` (or `drywet::limits::DEFAULT_LOOKAHEAD_S`) while Transport is started — `start()` does not mix the arrangement. Avoid moving `Context`, instruments, or schedulers between GUI threads.
 
 ## External GUI
 
@@ -27,7 +27,7 @@ GUI -> stdin:  {"cmd":"note-on", "note":"C4"}
 GUI <- stdout: {"ok":true}
 ```
 
-The engine uses `DeviceSink` by default. Pass `--buffer` in tests or when deterministic in-memory rendering is required. See [Engine protocol](engine.md) for the complete command set.
+The engine uses `DeviceSink` by default and pumps `tick` while Transport is started, so a stdio GUI must not drive the arrangement from a UI timer. Pass `--buffer` in tests or when deterministic in-memory rendering is required. See [Engine protocol](engine.md) for the complete command set.
 
 ## Rendering for visualization
 

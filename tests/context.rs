@@ -1,3 +1,4 @@
+use drywet::sink::Sink;
 use drywet::transport::TransportState;
 use drywet::{BufferSink, Context};
 
@@ -23,4 +24,13 @@ fn context_default_is_buffer_sink() {
     assert_eq!(ctx.sink().sample_rate(), 44100);
     assert_eq!(ctx.sink().channels(), 1);
     assert_eq!(ctx.transport().state(), TransportState::Stopped);
+}
+
+#[test]
+fn live_mix_time_behind_playhead_is_now() {
+    let ctx = Context::new();
+    ctx.sink_mut().write(&vec![0.0; ctx.sample_rate() as usize]);
+    assert!(ctx.live_mix_time(0.0, 0.0).is_none());
+    assert!(ctx.live_mix_time(1.0, 0.0).is_some());
+    assert_eq!(ctx.live_origin(), 1.0);
 }

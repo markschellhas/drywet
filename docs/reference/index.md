@@ -54,4 +54,4 @@ See [Getting started](getting-started.md), [Scheduling](scheduling.md), [Output]
 
 ## Design constraints
 
-The transport is sample-clocked, so a context has one sample rate and channel count for its lifetime. Live playback renders a finite phrase, starts the sink, and keeps the process alive until the sink drains. For interactive applications, keep the context and instruments on their owning thread and trigger notes while the device is playing.
+The transport is sample-clocked, so a context has one sample rate and channel count for its lifetime. A finite clip is `render` + play + drain. A live arrangement is `start` + `tick` (in-process frame loop or `drywet-engine`). `transport.start()` does not mix. Keep the context and instruments on their owning thread.

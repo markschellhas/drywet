@@ -25,7 +25,7 @@ live.transport().pause();
 live.transport().stop();
 ```
 
-`start`, `pause`, and `stop` return the transport reference for chaining; do not apply `?` to them. `set_bpm`, `set_time_signature`, and `set_loop_points` validate their inputs and return a `Result`.
+`start`, `pause`, and `stop` return the transport reference for chaining; do not apply `?` to them. `start()` is a state change and does not fire callbacks. `set_bpm`, `set_time_signature`, and `set_loop_points` validate their inputs and return a `Result`. Live hosts call `ctx.tick(lookahead)` (40 ms default) while started.
 
 ## Rendering and playback
 
@@ -37,7 +37,7 @@ ctx.sink_mut().play()?;
 ctx.sink().wait_until_end()?;
 ```
 
-`DeviceSink::play` opens and starts the native output stream. Keep the process alive while the stream is draining. For a long-running application, call `play` once, start the transport, and keep the event loop alive while triggering instruments.
+`DeviceSink::play` opens and starts the native output stream. Keep the process alive while the stream is draining. For a long-running application, call `play` once, start the transport, and `tick` from the event loop while triggering instruments. Mix live arrangement times from `ctx.live_origin()` so events are not scheduled behind the device write cursor.
 
 ## Threading
 

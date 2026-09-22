@@ -7,7 +7,7 @@ cargo run --bin drywet-engine              # PipeWireSink<MockStream> (callback 
 cargo run --bin drywet-engine -- --buffer  # BufferSink (inspectable PCM; what tests use)
 ```
 
-Context is always 44100 Hz, 1 channel. One persistent process. `stop` keeps the process and sink. `shutdown` disposes and exits.
+Context is always 44100 Hz, 1 channel. One persistent process. `stop` keeps the process and sink. `shutdown` disposes and exits. While Started, the engine ticks `DEFAULT_LOOKAHEAD_S` (40 ms) on stdin timeout — stdin is not the clock.
 
 Each stdin line is one JSON **object**. Empty lines are skipped. Pretty-printed multi-line JSON fails.
 
@@ -15,8 +15,8 @@ Each stdin line is one JSON **object**. Empty lines are skipped. Pretty-printed 
 
 | `cmd` | Also accepted | Effect |
 | --- | --- | --- |
-| `warmup` | | Replace the live instrument; `start_clock` on the sink |
-| `start` | | Optional bpm + loop flag + attach schedule; start Transport; reply `started` |
+| `warmup` | | Replace the live instrument. Does **not** start the device clock |
+| `start` | | Optional bpm + loop flag + attach schedule; start Transport; fire phrase; start clock; reply `started` |
 | `stop` | | Stop Transport (sink stays) |
 | `pause` | | Pause if started |
 | `resume` | | `transport.start()` |
@@ -63,7 +63,7 @@ Hosts should accept `ok: true`, `event == "started"`, and a present `error` stri
 | Field | Implemented? | Notes |
 | --- | --- | --- |
 | `bpm` | yes | Number or numeric string |
-| `loop` boolean | yes | Transport loop on/off. Null/absent → off |
+| `loop` boolean | yes | Transport loop on/off. Null/absent → off. `true` + sequence/part also `set_loop_points(0, phrase length)` |
 | `loop` object | schedule only | Does **not** set Transport loop. See Loop below |
 | `loopStart` / `loopEnd` | **no** | Ignored |
 | `sequence` | yes | See below |
@@ -80,7 +80,8 @@ You may send `sequence` and/or `part` and/or a Loop object on the same `start`. 
 
 - `events` must be a JSON array. `null` is a rest. Nested arrays subdivide.
 - `subdivision` string, default `"4n"`.
-- Callback plays `trigger_attack_release(..., "8n", Some(time))`.
+- Callback plays `trigger_attack_release(..., "8n", live_mix_time(origin, time))`.
+- On `start` with a schedule, engine `fire_until`s one phrase (two cycles if `loop: true`) before `started`.
 
 ### Part payload (implemented)
 

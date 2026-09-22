@@ -1,14 +1,14 @@
-use std::io::{self, Write};
+use std::io::{self, BufReader, Write};
 
 use drywet::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 use drywet::{run, run_with_config, BufferSink, DeviceSink};
 
 fn main() {
-    let stdin = io::stdin();
+    let stdin = BufReader::new(io::stdin());
     let stdout = io::stdout();
     let result: Result<(), String> = if std::env::args().skip(1).eq(["--buffer"]) {
         run(
-            stdin.lock(),
+            stdin,
             stdout.lock(),
             BufferSink::new(DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS),
         )
@@ -20,7 +20,7 @@ fn main() {
             .and_then(|sink| {
                 let sample_rate = sink.sample_rate();
                 let channels = sink.channels();
-                run_with_config(stdin.lock(), stdout.lock(), sample_rate, channels, sink)
+                run_with_config(stdin, stdout.lock(), sample_rate, channels, sink)
                     .map(|_| ())
                     .map_err(|err| err.to_string())
             })

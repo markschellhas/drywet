@@ -14,7 +14,7 @@ user_flow:
   primary: "App builds Sequence::new(callback, events, subdivision) → start(&mut ctx.transport(), offset) registers ids"
   nested: "Nested SequenceEvent groups subdivide a slot; Rest skips; callback is Fn(f64, Option<&str>)"
   part_loop: "Part schedules (time, value) pairs; Loop schedule_repeat at interval; stop() cancels this object's ids"
-  fire: "Nothing sounds until transport.start(), fire_until, or ctx.render"
+  fire: "Nothing sounds until tick, fire_until, or ctx.render; transport.start() only changes state"
 
 related_features:
   - transport (SequenceClock: schedule / schedule_repeat / cancel_ids)

@@ -53,7 +53,7 @@ fn engine_warmup_start_play_stop_shutdown() {
 
 #[test]
 fn engine_sequence_payload_and_error() {
-    let (lines, _ctx) = send(&[
+    let (lines, ctx) = send(&[
         json!({"cmd": "warmup", "instrument": "synth"}),
         json!({
             "cmd": "start",
@@ -65,6 +65,10 @@ fn engine_sequence_payload_and_error() {
     assert!(lines
         .iter()
         .any(|row| row.get("event") == Some(&json!("started"))));
+    assert!(
+        peak(ctx.sink().frames()) > 0.0,
+        "start + sequence must mix the first phrase"
+    );
 
     let mut err_out = Vec::new();
     run(
@@ -111,7 +115,7 @@ fn engine_note_off_and_trigger_aliases() {
 
 #[test]
 fn engine_part_and_loop_payload() {
-    let (lines, _ctx) = send(&[
+    let (lines, ctx) = send(&[
         json!({"cmd": "warmup", "instrument": "synth"}),
         json!({
             "cmd": "start",
@@ -124,6 +128,35 @@ fn engine_part_and_loop_payload() {
         .iter()
         .any(|row| row.get("event") == Some(&json!("started"))));
     assert!(lines.iter().all(|row| row.get("error").is_none()));
+    assert!(peak(ctx.sink().frames()) > 0.0);
+}
+
+#[test]
+fn engine_looped_sequence_mixes_second_cycle() {
+    let (lines, ctx) = send(&[
+        json!({"cmd": "warmup", "instrument": "synth"}),
+        json!({
+            "cmd": "start",
+            "bpm": 120,
+            "loop": true,
+            "sequence": {"events": ["C4", "E4", "G4", "B4"], "subdivision": "4n"},
+        }),
+        json!({"cmd": "shutdown"}),
+    ]);
+    assert!(lines
+        .iter()
+        .any(|row| row.get("event") == Some(&json!("started"))));
+    let frames = ctx.sink().frames();
+    let bar = (2.0 * f64::from(ctx.sample_rate())) as usize;
+    assert!(
+        frames.len() > bar,
+        "expected mix past the first bar, got {} frames",
+        frames.len()
+    );
+    assert!(
+        peak(&frames[bar..]) > 0.0,
+        "loop:true must mix a second cycle after the phrase length"
+    );
 }
 
 #[test]

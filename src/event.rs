@@ -159,7 +159,7 @@ impl<S: Sink> SequenceClock for TransportRef<'_, S> {
 ///
 /// Nested lists subdivide the parent slot. `None` / [`SequenceEvent::Rest`]
 /// is a rest. `.start(offset)` only registers ids; callbacks stay silent
-/// until `transport.start()` / [`Transport::fire_until`] / later render.
+/// until [`Transport::tick`] / [`Transport::fire_until`] / [`crate::Context::render`].
 pub struct Sequence {
     callback: Rc<dyn Fn(f64, Option<&str>)>,
     events: Vec<SequenceEvent>,
@@ -243,7 +243,7 @@ fn flatten(events: &[SequenceEvent], start: f64, width: f64) -> Vec<(f64, String
 /// Timed event list: each `(when, value)` is scheduled relative to start offset.
 ///
 /// `.start(offset)` only registers ids; callbacks stay silent until
-/// `transport.start()` / [`Transport::fire_until`] / later render.
+/// [`Transport::tick`] / [`Transport::fire_until`] / [`crate::Context::render`].
 pub struct Part {
     callback: Rc<dyn Fn(f64, &str)>,
     events: Vec<(TimeValue, String)>,
@@ -314,7 +314,7 @@ impl Part {
 /// Repeating callback attached to a [`SequenceClock`].
 ///
 /// `.start(offset)` registers one `schedule_repeat`; callbacks stay silent
-/// until `transport.start()` / [`Transport::fire_until`] / later render.
+/// until [`Transport::tick`] / [`Transport::fire_until`] / [`crate::Context::render`].
 pub struct Loop {
     callback: Rc<dyn Fn(f64)>,
     interval: TimeValue,

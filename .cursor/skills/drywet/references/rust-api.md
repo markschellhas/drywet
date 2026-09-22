@@ -26,6 +26,9 @@ ctx.set_inserts(impl IntoIterator<Item = Box<dyn Insert>>) -> Result<(), InsertE
 ctx.clear_inserts() -> Result<(), InsertError>
 ctx.bus("drums") -> Result<Bus, BusError>           // create-or-get; "master" is InvalidName
 ctx.render(impl IntoTime) -> Result<Vec<f32>, TransportError>  // buses folded + wet copy; sink.frames() stay dry master
+ctx.tick(impl IntoTime) -> Result<(), TransportError>           // live driver; no-op unless Started
+ctx.live_origin() -> f64                                       // write_cursor / sample_rate
+ctx.live_mix_time(origin_s, event_s) -> Option<TimeValue>      // None if behind playhead
 ```
 
 Default `Context` is `Context<BufferSink>`. Live Linux:
@@ -63,6 +66,7 @@ ctx.sink_mut().start_clock();
 | `cancel(after)` / `cancel_ids` / `clear` | Drop events |
 | `dispose` | `clear` + `stop` + `sink.close` (TransportRef only) |
 | `fire_until` | Drive scheduled callbacks without mixing |
+| `tick(lookahead)` | Live driver: `fire_until(seconds+lookahead)` while Started; no-op if Stopped/Paused |
 
 `schedule` rejects times `< 0` or `> 600`. `schedule_repeat` rejects non-positive intervals when occurrences are generated.
 
@@ -209,12 +213,13 @@ sampler.trigger_attack_on(&ctx, &drums, "C4", Some(time.into()))?;
 | `DEFAULT_CHANNELS` | 1 |
 | `DEFAULT_MAX_VOICES` | 32 |
 | `MAX_SCHEDULE_SECONDS` | 600 |
+| `DEFAULT_LOOKAHEAD_S` | 0.04 |
 | `MAX_INSERTS` | 8 |
 | `MAX_BUSES` | 8 extra named buses (not counting master) |
 
 ## Engine helper
 
-`drywet::run(stdin, stdout, sink) -> io::Result<Rc<Context<S>>>` — in-process NDJSON handler used by `drywet-engine` and `tests/engine.rs`. `shutdown` disposes and returns; EOF returns without dispose.
+`drywet::run(stdin, stdout, sink) -> io::Result<Rc<Context<S>>>` — in-process NDJSON handler used by `drywet-engine` and `tests/engine.rs`. `R: BufRead + Send + 'static`. While Started, ticks on a 40 ms stdin timeout. `shutdown` disposes and returns; EOF returns without dispose.
 
 ## Sharing from callbacks
 
