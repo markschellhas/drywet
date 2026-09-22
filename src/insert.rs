@@ -83,11 +83,14 @@ impl fmt::Display for InsertError {
 
 impl Error for InsertError {}
 
+/// Mono frames processed per stack chunk in [`apply_interleaved`].
+const CHUNK_FRAMES: usize = 64;
+
 /// Apply `chain` to interleaved PCM.
 ///
 /// Mono (`channels == 1`) is processed in place. More channels: take the first
-/// sample of each frame, process a mono stream in stack chunks of 64, then
-/// duplicate the result across the frame.
+/// sample of each frame, process a mono stream in stack chunks of
+/// [`CHUNK_FRAMES`], then duplicate the result across the frame.
 pub fn apply_interleaved(chain: &mut InsertChain, interleaved: &mut [f32], channels: u16) {
     if channels <= 1 {
         chain.process(interleaved);
@@ -97,8 +100,8 @@ pub fn apply_interleaved(chain: &mut InsertChain, interleaved: &mut [f32], chann
     let mut offset = 0;
     while offset + ch <= interleaved.len() {
         let remaining_frames = (interleaved.len() - offset) / ch;
-        let n = remaining_frames.min(64);
-        let mut mono = [0.0f32; 64];
+        let n = remaining_frames.min(CHUNK_FRAMES);
+        let mut mono = [0.0f32; CHUNK_FRAMES];
         for frame in 0..n {
             mono[frame] = interleaved[offset + frame * ch];
         }

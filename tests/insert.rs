@@ -116,9 +116,37 @@ fn process_chunks_match_one_call() {
 fn stereo_apply_processes_mono_then_duplicates() {
     let mut chain = InsertChain::new();
     chain.set(vec![boxed(Gain { gain: 2.0 })]).unwrap();
-    let mut interleaved = [0.25, 0.25, 0.5, 0.5];
+    let mut interleaved = [0.25, 0.1, 0.5, 0.2];
     apply_interleaved(&mut chain, &mut interleaved, 2);
     assert_eq!(interleaved, [0.5, 0.5, 1.0, 1.0]);
+}
+
+#[test]
+fn stereo_apply_chunks_match_extracted_mono() {
+    // Longer than apply_interleaved's 64-frame stack chunk so remainder n < 64.
+    const FRAMES: usize = 70;
+    let mut interleaved = vec![0.0f32; FRAMES * 2];
+    for i in 0..FRAMES {
+        interleaved[i * 2] = 0.25;
+        interleaved[i * 2 + 1] = 0.1;
+    }
+
+    let mut wet = InsertChain::new();
+    wet.set(vec![boxed(Integrator { acc: 0.0 })]).unwrap();
+    let mut applied = interleaved.clone();
+    apply_interleaved(&mut wet, &mut applied, 2);
+
+    let mut mono: Vec<f32> = interleaved.chunks(2).map(|frame| frame[0]).collect();
+    let mut reference = InsertChain::new();
+    reference.set(vec![boxed(Integrator { acc: 0.0 })]).unwrap();
+    reference.process(&mut mono);
+
+    let mut expected = vec![0.0f32; FRAMES * 2];
+    for i in 0..FRAMES {
+        expected[i * 2] = mono[i];
+        expected[i * 2 + 1] = mono[i];
+    }
+    assert_eq!(applied, expected);
 }
 
 #[test]
@@ -138,6 +166,18 @@ fn chain_full_keeps_previous_inserts() {
     let mut frames = [1.0];
     chain.process(&mut frames);
     assert_eq!(frames, [2.0]);
+}
+
+#[test]
+fn chain_at_max_inserts_applies_all() {
+    let mut chain = InsertChain::new();
+    let inserts: Vec<Box<dyn Insert>> = (0..MAX_INSERTS)
+        .map(|_| boxed(Gain { gain: 2.0 }))
+        .collect();
+    chain.set(inserts).unwrap();
+    let mut frames = [1.0];
+    chain.process(&mut frames);
+    assert_eq!(frames, [256.0]);
 }
 
 #[test]
