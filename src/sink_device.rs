@@ -17,6 +17,7 @@ use cpal::{
     StreamConfig, I24,
 };
 
+use crate::insert::{apply_interleaved, Insert, InsertChain, InsertError};
 use crate::sink::Sink;
 
 /// Failure opening, starting, or draining the system's default audio device.
@@ -46,6 +47,7 @@ struct Playback {
     playing: bool,
     accepted: bool,
     stream_error: Option<String>,
+    inserts: InsertChain,
 }
 
 impl Playback {
@@ -109,6 +111,28 @@ impl Playback {
             self.mono.clear();
             self.base_cursor = self.playback_cursor;
         }
+    }
+
+    fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        self.inserts.set(inserts)
+    }
+
+    #[cfg(test)]
+    fn process_output(&mut self, output: &mut [f32], channels: u16) {
+        let ch = usize::from(channels.max(1));
+        if output.is_empty() {
+            return;
+        }
+        let n_frames = output.len() / ch;
+        for frame in 0..n_frames {
+            let sample = self.sample_at(self.playback_cursor);
+            self.playback_cursor = self.playback_cursor.saturating_add(1);
+            let base = frame * ch;
+            for c in 0..ch {
+                output[base + c] = sample;
+            }
+        }
+        apply_interleaved(&mut self.inserts, output, channels);
     }
 }
 
@@ -239,6 +263,17 @@ impl DeviceSink {
         }
         lock(&self.state).playing = false;
     }
+
+    /// Replace the playback insert chain. Mix stays dry.
+    pub fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        lock(&self.state).set_inserts(inserts)
+    }
+
+    /// Apply the insert chain to `frames`. Does not rewrite the dry mono buffer.
+    pub fn apply_inserts(&mut self, frames: &mut [f32]) {
+        let mut state = lock(&self.state);
+        apply_interleaved(&mut state.inserts, frames, self.channels);
+    }
 }
 
 impl Sink for DeviceSink {
@@ -279,6 +314,14 @@ impl Sink for DeviceSink {
         if let Err(err) = self.play() {
             lock(&self.state).stream_error = Some(err.to_string());
         }
+    }
+
+    fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        DeviceSink::set_inserts(self, inserts)
+    }
+
+    fn apply_inserts(&mut self, frames: &mut [f32]) {
+        DeviceSink::apply_inserts(self, frames)
     }
 }
 
@@ -330,9 +373,11 @@ where
                 for frame in output.chunks_mut(channels) {
                     let sample = state.sample_at(state.playback_cursor);
                     state.playback_cursor = state.playback_cursor.saturating_add(1);
-                    let sample = T::from_sample(sample.clamp(-1.0, 1.0));
+                    let mut mono = [sample];
+                    apply_interleaved(&mut state.inserts, &mut mono, 1);
+                    let converted = T::from_sample(mono[0].clamp(-1.0, 1.0));
                     for output_sample in frame {
-                        *output_sample = sample;
+                        *output_sample = converted;
                     }
                 }
                 state.reclaim_consumed();
@@ -350,6 +395,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::Playback;
+    use crate::insert::Insert;
+
+    struct Gain {
+        gain: f32,
+    }
+    impl Insert for Gain {
+        fn process(&mut self, frames: &mut [f32]) {
+            for sample in frames {
+                *sample *= self.gain;
+            }
+        }
+    }
+
+    #[test]
+    fn playback_process_output_applies_inserts_after_mix() {
+        let mut playback = Playback::default();
+        playback
+            .set_inserts(vec![Box::new(Gain { gain: 2.0 })])
+            .unwrap();
+        playback.mix(&[0.25, 0.5], Some(0));
+        let mut out = [0.0f32; 2];
+        playback.process_output(&mut out, 1);
+        assert_eq!(out, [0.5, 1.0]);
+        assert_eq!(playback.mono, [0.25, 0.5]);
+    }
+
+    #[test]
+    fn playback_process_output_stereo_duplicates_after_mono_insert() {
+        let mut playback = Playback::default();
+        playback
+            .set_inserts(vec![Box::new(Gain { gain: 2.0 })])
+            .unwrap();
+        playback.mix(&[0.25], Some(0));
+        let mut out = [0.0f32; 2];
+        playback.process_output(&mut out, 2);
+        assert_eq!(out, [0.5, 0.5]);
+    }
 
     #[test]
     fn playback_stages_and_mixes_without_a_device() {
