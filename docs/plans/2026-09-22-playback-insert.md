@@ -29,7 +29,7 @@
 
 ## Progress
 
-**Status:** `█████████████████░░░` 6/7 done (86%) · Task 7 in flight
+**Status:** `████████████████████` 7/7 done (100%) · complete
 
 | # | Task | Status | Next |
 |---|------|--------|------|
@@ -39,7 +39,7 @@
 | 4 | PipeWireSink::process applies chain | `done` | — |
 | 5 | DeviceSink callback applies chain | `done` | — |
 | 6 | Patch maps and output docs | `done` | — |
-| 7 | Full-suite regression | `implementing` | implement |
+| 7 | Full-suite regression | `done` | — |
 
 Shared test command: `cargo test -q`
 
@@ -917,11 +917,11 @@ git commit -m "docs: map playback inserts onto sinks and context"
 
 ---
 
-### [ ] Task 7: Full-suite regression
+### [x] Task 7: Full-suite regression
 
-**Status:** `implementing`
-**Resume:** Run `cargo test -q` and `./bin/feature-map validate && ./bin/feature-map check`. Skip commit if green.
-**Commits:** —
+**Status:** `done`
+**Resume:** —
+**Commits:** none (suite green; no extra diff)
 
 **Files:** none unless a test fails.
 
