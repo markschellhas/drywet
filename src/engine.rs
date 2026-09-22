@@ -309,7 +309,7 @@ fn apply_phrase_loop_points<S: Sink>(ctx: &Context<S>, msg: &Value) -> Result<()
     if !matches!(msg.get("loop"), Some(Value::Bool(true))) {
         return Ok(());
     }
-    let mut length = 0.0;
+    let mut length = 0.0_f64;
     if let Some(spec) = msg.get("sequence").and_then(Value::as_object) {
         length = length.max(sequence_length_s(ctx, spec)?);
     }
@@ -328,7 +328,7 @@ fn start_horizon<S: Sink>(ctx: &Context<S>, msg: &Value) -> Result<Option<f64>, 
     if !has_schedule(msg) {
         return Ok(None);
     }
-    let mut horizon = 0.0;
+    let mut horizon = 0.0_f64;
     if let Some(spec) = msg.get("sequence").and_then(Value::as_object) {
         horizon = horizon.max(sequence_length_s(ctx, spec)?);
     }
