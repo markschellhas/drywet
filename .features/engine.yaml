@@ -1,0 +1,29 @@
+feature_name: engine
+purpose: "NDJSON stdio host so QML and other out-of-process UIs can drive Context, Transport, and instruments without linking Rust."
+
+entry_points:
+  - src/engine.rs
+  - src/bin/drywet-engine.rs
+  - examples/engine_session.rs
+
+apps:
+  - src
+  - examples
+
+user_flow:
+  primary: "Host spawns drywet-engine (DeviceSink) or drywet-engine --buffer → one JSON object per stdin line"
+  commands: "Host sends warmup / start / stop / pause / resume / play-midi / note-on / note-off / bpm / shutdown"
+  events: "Engine writes {ok:true}, {event:started, latencyMs, position}, or {error:...} per line"
+  schedule: "start.sequence / start.part are objects; a loop object is Loop, a boolean loop is Transport.loop"
+
+related_features:
+  - context (engine constructs one Context)
+  - sinks (DeviceSink default; BufferSink for --buffer)
+  - instruments (warmup selects Synth, Drum, or Sampler)
+  - events (optional Sequence / Part / Loop on start)
+  - transport (start / stop / pause / resume / bpm / dispose)
+
+notes: >
+  Do not pretty-print JSON across lines. trigger_attack / trigger_release are
+  aliases of note-on / note-off. Sampler warmup loop_flag is stored; held-loop
+  mix is not implemented.

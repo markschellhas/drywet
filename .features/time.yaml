@@ -1,0 +1,30 @@
+feature_name: time
+purpose: "Tone-style time and pitch conversion: note values, relative +4n, BBS, seconds, MIDI/scientific pitch, and v1 limits."
+
+entry_points:
+  - src/time.rs
+  - src/pitch.rs
+  - src/limits.rs
+
+apps:
+  - src
+
+core_components:
+  to_seconds: src/time.rs
+  note_to_midi: src/pitch.rs
+  constants: src/limits.rs
+
+user_flow:
+  primary: "App passes \"4n\" / \"8n.\" / \"8t\" / \"1m\" / \"+4n\" / \"0:1:0\" / seconds → to_seconds against bpm and time_signature"
+  pitch: "App passes \"C4\" / \"C#4\" / \"Db4\" / 60 → note_to_midi then midi_to_hz"
+  error: "Invalid time string, \"H4\", MIDI outside 0–127, or Hz outside 20–20000 → Err"
+
+related_features:
+  - transport (clock conversions)
+  - instruments (note names and durations)
+  - events (subdivision and offset times)
+  - context (to_seconds is safe from a schedule callback)
+
+notes: >
+  Note names like C0 are allowed even if below 20 Hz. Prefer ctx.to_seconds so now
+  and bpm stay locked to the playhead.

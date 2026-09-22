@@ -1,0 +1,28 @@
+feature_name: events
+purpose: "Musician-facing Transport attachments: Sequence, Part, and Loop register callbacks that receive sample time and do not write PCM."
+
+entry_points:
+  - src/event.rs
+  - examples/bassline.rs
+  - examples/jam.rs
+
+apps:
+  - src
+  - examples
+
+user_flow:
+  primary: "App builds Sequence::new(callback, events, subdivision) → start(&mut ctx.transport(), offset) registers ids"
+  nested: "Nested SequenceEvent groups subdivide a slot; Rest skips; callback is Fn(f64, Option<&str>)"
+  part_loop: "Part schedules (time, value) pairs; Loop schedule_repeat at interval; stop() cancels this object's ids"
+  fire: "Nothing sounds until transport.start(), fire_until, or ctx.render"
+
+related_features:
+  - transport (SequenceClock: schedule / schedule_repeat / cancel_ids)
+  - instruments (callbacks trigger voices at time)
+  - engine (start.sequence / start.part / start.loop JSON objects)
+  - time (subdivision and event offsets)
+  - context (one Transport per Context)
+
+notes: >
+  Sequence::start takes &mut impl SequenceClock and an offset. Callbacks must not
+  block or write PCM.
