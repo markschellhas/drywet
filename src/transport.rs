@@ -671,6 +671,21 @@ impl Transport {
         self.seconds = until_s;
         Ok(())
     }
+
+    /// Live driver: `fire_until(seconds + lookahead)` while [`Started`](TransportState::Started).
+    ///
+    /// Stopped and paused are no-ops. `start()` does not call this — a host
+    /// (in-process frame loop or `drywet-engine`) must. Idempotent: already
+    /// fired occurrences are not mixed again. Caps at [`MAX_SCHEDULE_SECONDS`].
+    /// Default lookahead is [`crate::limits::DEFAULT_LOOKAHEAD_S`] (40 ms).
+    pub fn tick(&mut self, lookahead: impl IntoTime) -> Result<(), TransportError> {
+        if self.state != TransportState::Started {
+            return Ok(());
+        }
+        let lookahead_s = self.to_seconds(lookahead)?;
+        let until = (self.seconds + lookahead_s).min(MAX_SCHEDULE_SECONDS);
+        self.fire_until(until)
+    }
 }
 
 /// Fire due events without holding a `RefCell` borrow across callbacks.
@@ -932,5 +947,18 @@ impl<'a, S: Sink> TransportRef<'a, S> {
     /// instruments can mix and convert time.
     pub fn fire_until(&mut self, until: impl IntoTime) -> Result<(), TransportError> {
         fire_until_releasing(self.transport, until)
+    }
+
+    /// Live driver: `fire_until(seconds + lookahead)` while Started.
+    ///
+    /// Stopped and paused are no-ops. Does not spawn a thread. Caps at
+    /// [`MAX_SCHEDULE_SECONDS`]. See [`crate::limits::DEFAULT_LOOKAHEAD_S`].
+    pub fn tick(&mut self, lookahead: impl IntoTime) -> Result<(), TransportError> {
+        if self.state() != TransportState::Started {
+            return Ok(());
+        }
+        let lookahead_s = self.to_seconds(lookahead)?;
+        let until = (self.seconds() + lookahead_s).min(MAX_SCHEDULE_SECONDS);
+        self.fire_until(until)
     }
 }

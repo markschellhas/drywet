@@ -16,7 +16,7 @@ Use `--buffer` when a caller needs deterministic in-memory rendering instead of 
 {"cmd":"start","bpm":120,"loop":true,"sequence":{"events":["C4","E4","G4"],"subdivision":"8n"}}
 ```
 
-The supported top-level schedule fields are `sequence`, `part`, and `loop`. A boolean `loop` enables transport looping; an object describes a repeating loop event:
+`start` + `sequence` (or `part` / a `loop` object) mixes the phrase before the engine replies `started`, and keeps ticking while Transport is started. Stdin is not the clock — an idle host still hears the arrangement. A boolean `loop` enables transport looping and sets loop points from the phrase length so the sequence repeats; an object describes a repeating loop event:
 
 ```json
 {"cmd":"start","bpm":90,"loop":{"interval":"4n","note":"kick","duration":"16n"}}
@@ -25,10 +25,10 @@ The supported top-level schedule fields are `sequence`, `part`, and `loop`. A bo
 ## Commands
 
 - `warmup` initializes the engine.
-- `start` schedules the supplied phrase and starts the transport.
-- `stop`, `pause`, and `resume` control transport state.
+- `start` schedules the supplied phrase, starts the transport, and mixes due events. Boolean `loop` repeats the phrase; `play-midi` is live hits only.
+- `stop`, `pause`, and `resume` control transport state. `pause` stops ticking; `resume` starts the pump again.
 - `bpm` changes tempo.
-- `play-midi` triggers a MIDI note for a duration.
+- `play-midi` triggers a MIDI note at the write cursor. Do not use it as the arrangement clock.
 - `note-on`/`trigger_attack` and `note-off`/`trigger_release` control a voice.
 - `shutdown` ends the process.
 

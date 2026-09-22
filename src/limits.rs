@@ -25,6 +25,13 @@ pub const DEFAULT_MAX_VOICES: u32 = 32;
 /// Longest schedule interval accepted by Transport, in seconds.
 pub const MAX_SCHEDULE_SECONDS: f64 = 600.0;
 
+/// Default live-driver lookahead (sequenzer `LOOKAHEAD_S`).
+///
+/// [`crate::Context::tick`] / [`crate::transport::TransportRef::tick`] fire
+/// this far ahead of the playhead. `drywet-engine` uses the same window as
+/// its stdin poll timeout.
+pub const DEFAULT_LOOKAHEAD_S: f64 = 0.04;
+
 /// Max playback inserts on one sink. Replacing the chain never grows in the callback.
 pub const MAX_INSERTS: usize = 8;
 

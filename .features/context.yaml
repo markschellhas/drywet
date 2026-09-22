@@ -14,6 +14,7 @@ user_flow:
   primary: "App calls Context::new() → BufferSink at 44100 Hz mono + one Transport"
   live: "App opens DeviceSink → Context::with(rate, channels, sink) → instruments share that Context"
   render: "App calls ctx.render(duration) → starts clock, fires events, pads the sink, returns wet PCM; sink.frames() stays dry"
+  tick: "App calls ctx.tick(lookahead) while Started → fire_until(seconds+lookahead); Stopped/Paused no-op; live_origin is write_cursor/sample_rate"
   insert: "App calls ctx.set_inserts(...) → forwards to the owned sink"
   bus: "App calls ctx.bus(name) → create-or-get a named extra mix destination on the owned sink"
 

@@ -24,7 +24,7 @@ core_components:
 
 user_flow:
   tests: "Context::new() uses BufferSink; mix sums tails; write advances write_cursor; latency_ms is 0"
-  live: "App opens DeviceSink::new() → Context::with(negotiated rate/channels, sink) → play() then wait_until_end()"
+  live: "App opens DeviceSink::new() → Context::with(negotiated rate/channels, sink) → play() then wait_until_end(); live mix origin is write_cursor/sample_rate"
   pipewire: "PipeWireSink::new injects MockStream; a real device uses PipeWireSink::with_backend"
   insert: "App calls ctx.set_inserts(...) → mix/write stay dry; render/process/callback run the chain"
   bus: "App calls ctx.bus(\"drums\") → extra dry store + insert chain; output folds buses then master inserts"

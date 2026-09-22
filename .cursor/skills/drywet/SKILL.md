@@ -96,7 +96,7 @@ Rules:
 - Callback is `Fn(f64, Option<&str>)`. Rests pass `None`.
 - Nested subdivision uses `drywet::event::SequenceEvent` (`Value`, `Rest`, `Group`), not `drywet::Event`.
 - Callbacks must not block and must not write PCM. They only trigger instruments at `time`.
-- `.start()` only registers ids. Nothing fires until `transport.start()`, `fire_until`, or `ctx.render`.
+- `.start()` only registers ids. Nothing fires until `tick`, `fire_until`, or `ctx.render`. `transport.start()` is a state change.
 
 ### Drum grid
 
@@ -135,7 +135,7 @@ let pcm = ctx.render("1m")?;                 // Vec<f32>, starts if needed
 synth.trigger_attack_release(&ctx, "A4", 0.05, None)?; // live, does not stop clock
 ```
 
-`render` lives on **`Context`**, not `Transport`. Playhead after render is the converted duration.
+`render` lives on **`Context`**, not `Transport`. Playhead after render is the converted duration. Live hosts call `ctx.tick(DEFAULT_LOOKAHEAD_S)` (40 ms) while Started. `drywet-engine` pumps that tick; a QML host must not.
 
 ### Engine child (implemented verbs)
 
@@ -181,6 +181,7 @@ t.schedule_repeat(cb, "4n", 0)?;
 t.cancel("2m")?;
 t.clear();
 t.fire_until("1m")?;
+t.tick(0.04)?; // no-op unless Started
 ```
 
 Playhead: `seconds()`, `ticks()`, `position()` → `"bars:beats:sixteenths"`. After `start()` from stopped, seconds reset to 0. UI needles should offset wall clock by `latency_ms()` (0 on BufferSink).

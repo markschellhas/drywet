@@ -19,7 +19,7 @@ let mut seq = drywet::Sequence::new(
 seq.start(&mut ctx.transport(), 0)?;
 ```
 
-The first argument to `start` is a mutable transport reference; the second is the start offset in ticks. Render or start the transport after registering the event.
+The first argument to `start` is a mutable transport reference; the second is the start offset. Registering only attaches ids. Device output is `tick` + play, or `render` + play + drain — `transport.start()` alone does not mix.
 
 ## Part
 
@@ -49,4 +49,4 @@ looped.start(&mut ctx.transport(), 0)?;
 
 ## Groups, rests, and finite playback
 
-Nested sequence values use `drywet::event::SequenceEvent::{Value, Rest, Group}` when a phrase needs chords or silence. For offline output, schedule events and call `ctx.render("4m")?`; for device output, render a finite phrase, call `ctx.sink_mut().play()?`, and wait for the sink to drain. A callback's return type is unit, so handle instrument errors inside it.
+Nested sequence values use `drywet::event::SequenceEvent::{Value, Rest, Group}` when a phrase needs chords or silence. For offline output, schedule events and call `ctx.render("4m")?`. For a finite device clip, render, call `ctx.sink_mut().play()?`, and wait for the sink to drain. For a live arrangement, `transport.start()` then `tick` from the host frame loop (or let `drywet-engine` pump). A callback's return type is unit, so handle instrument errors inside it.

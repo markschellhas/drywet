@@ -14,7 +14,8 @@ user_flow:
   primary: "Host spawns drywet-engine (DeviceSink) or drywet-engine --buffer → one JSON object per stdin line"
   commands: "Host sends warmup / start / stop / pause / resume / play-midi / note-on / note-off / bpm / shutdown"
   events: "Engine writes {ok:true}, {event:started, latencyMs, position}, or {error:...} per line"
-  schedule: "start.sequence / start.part are objects; a loop object is Loop, a boolean loop is Transport.loop"
+  schedule: "start.sequence / start.part are objects; a loop object is Loop, a boolean loop is Transport.loop plus set_loop_points(0, phrase length)"
+  pump: "While Started, engine ticks DEFAULT_LOOKAHEAD_S on stdin timeout; stdin is not the clock; pause stops the pump, resume restarts it"
 
 related_features:
   - context (engine constructs one Context)
@@ -26,4 +27,6 @@ related_features:
 notes: >
   Do not pretty-print JSON across lines. trigger_attack / trigger_release are
   aliases of note-on / note-off. Sampler warmup loop_flag is stored; held-loop
-  mix is not implemented. No bus or insert commands.
+  mix is not implemented. No bus or insert commands. warmup does not start the
+  device clock. start + sequence fire_untils one phrase (two if loop:true)
+  before started. Mix times are live_origin + event.

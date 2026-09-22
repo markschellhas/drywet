@@ -62,7 +62,7 @@ ctx.sink_mut().play()?;
 ctx.sink().wait_until_end()?;
 ```
 
-Use `ctx.transport().start()` only for a live, long-running transport. It returns the transport reference, not a `Result`; scheduled events then run as the process remains alive.
+Use `ctx.transport().start()` only for a live, long-running transport. It returns the transport reference, not a `Result`, and is a state change — it does not fire callbacks or spawn a clock. In-process hosts must call `ctx.tick(lookahead)` (40 ms is [`drywet::limits::DEFAULT_LOOKAHEAD_S`]) from their frame loop. Stdio hosts spawn `drywet-engine`, which pumps `tick` while Transport is started. Offline clips still use `render` then `play` then drain.
 
 ## Offline rendering
 
