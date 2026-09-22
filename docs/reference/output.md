@@ -28,6 +28,17 @@ let pcm = ctx.render("1m")?;
 
 Use this sink for tests, waveform inspection, and file/export pipelines. It never opens an audio device.
 
+## Playback insert
+
+`mix` and `write` stay dry. Attach a chain on the Context; output runs it:
+
+```rust
+ctx.set_inserts(vec![Box::new(my_insert) as Box<dyn drywet::Insert>])?;
+let pcm = ctx.render("1m")?;
+```
+
+`render` returns a processed copy. `sink.frames()` has the same length and stays dry. `PipeWireSink::process` and the `DeviceSink` callback apply the same chain after summing queued PCM. An empty chain is identity. There is no engine NDJSON command for inserts.
+
 ## PipeWire sink
 
 `PipeWireSink::new(sample_rate, channels)` is a callback sink for integration and testing. It is not the default live path for examples and does not select or open a system output device. Use `DeviceSink` for audible playback.

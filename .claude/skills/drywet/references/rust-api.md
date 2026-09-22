@@ -5,7 +5,7 @@ Matches `src/` and `tests/` on this repo. Crate version `0.1.0`.
 ## Crate root re-exports
 
 ```rust
-drywet::{VERSION, Context, run, Loop, Part, Sequence, Drum, Sampler, Synth, BufferSink, PipeWireSink, Sink}
+drywet::{VERSION, Context, run, Loop, Part, Sequence, Drum, Sampler, Synth, BufferSink, PipeWireSink, Sink, Insert, InsertChain, InsertError}
 ```
 
 Everything else is namespaced: `drywet::transport`, `drywet::event`, `drywet::time`, `drywet::pitch`, `drywet::limits`, `drywet::instrument`.
@@ -22,7 +22,9 @@ ctx.channels() -> u16
 ctx.sink() / ctx.sink_mut()                         // Ref / RefMut
 ctx.transport() -> TransportRef<'_, S>
 ctx.to_seconds(impl IntoTime) -> Result<f64, TimeError>
-ctx.render(impl IntoTime) -> Result<Vec<f32>, TransportError>
+ctx.set_inserts(impl IntoIterator<Item = Box<dyn Insert>>) -> Result<(), InsertError>
+ctx.clear_inserts() -> Result<(), InsertError>
+ctx.render(impl IntoTime) -> Result<Vec<f32>, TransportError>  // wet copy; sink.frames() stay dry
 ```
 
 Default `Context` is `Context<BufferSink>`. Live Linux:
@@ -149,6 +151,8 @@ trait Sink {
     fn latency_ms(&self) -> u32;
     fn write_cursor(&self) -> usize;
     fn accepted(&self) -> bool;
+    fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError>;
+    fn apply_inserts(&mut self, frames: &mut [f32]);
     fn mark_accepted(&mut self);
     fn start_clock(&mut self);
     fn frames(&self) -> &[f32];
@@ -157,7 +161,22 @@ trait Sink {
 
 `BufferSink::new(sample_rate, channels)` — expanding f32 buffer. Stereo duplicates each mono frame. `to_pcm_s16le()` clips to [-1, 1] and packs LE i16. `stop`/`close` are no-ops.
 
-`mix` at `Some(at)` does not advance the write cursor. `write` mixes at the cursor and advances. Tails sum.
+`mix` at `Some(at)` does not advance the write cursor. `write` mixes at the cursor and advances. Tails sum. Mix and write never run inserts. Defaults for `set_inserts` / `apply_inserts` are no-ops; BufferSink, PipeWireSink, and DeviceSink override.
+
+## Inserts
+
+```rust
+trait Insert: Send + 'static {
+    fn process(&mut self, frames: &mut [f32]); // mono sample stream
+}
+
+InsertChain::new()
+chain.set(inserts) -> Result<(), InsertError>  // ChainFull { max, got } if > MAX_INSERTS
+chain.process(&mut frames)                     // first insert first
+ctx.set_inserts(vec![Box::new(my_insert) as Box<dyn drywet::Insert>])?
+```
+
+Chain order is playback order. Mix stays dry. `render` / `PipeWireSink::process` / the DeviceSink callback run the chain. Empty chain is identity.
 
 ## Limits (`drywet::limits`)
 
@@ -171,6 +190,7 @@ trait Sink {
 | `DEFAULT_CHANNELS` | 1 |
 | `DEFAULT_MAX_VOICES` | 32 |
 | `MAX_SCHEDULE_SECONDS` | 600 |
+| `MAX_INSERTS` | 8 |
 
 ## Engine helper
 
