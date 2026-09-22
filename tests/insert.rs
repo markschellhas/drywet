@@ -5,6 +5,7 @@ use drywet::insert::{apply_interleaved, Insert, InsertChain, InsertError};
 use drywet::limits::MAX_INSERTS;
 use drywet::BufferSink;
 use drywet::Context;
+use drywet::PipeWireSink;
 
 struct Gain {
     gain: f32,
@@ -264,4 +265,55 @@ fn set_inserts_after_mix_changes_next_render() {
     let wet = ctx.render(1.0 / f64::from(ctx.sample_rate())).unwrap();
     assert_eq!(&wet[..1], &[0.5]);
     assert_eq!(&ctx.sink().frames()[..1], &[1.0]);
+}
+
+#[test]
+fn pipewire_process_is_wet_slots_stay_queued_until_callback() {
+    let mut sink = PipeWireSink::new(44100, 1);
+    sink.set_inserts(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    sink.mix(&[0.25, 0.5], Some(0));
+    let mut out = [0.0f32; 2];
+    sink.process(&mut out);
+    assert_eq!(out, [0.5, 1.0]);
+}
+
+#[test]
+fn pipewire_param_after_enqueue_affects_already_queued_audio() {
+    let bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+    struct LiveGain {
+        bits: Arc<AtomicU32>,
+    }
+    impl Insert for LiveGain {
+        fn process(&mut self, frames: &mut [f32]) {
+            let gain = f32::from_bits(self.bits.load(Ordering::Relaxed));
+            for sample in frames {
+                *sample *= gain;
+            }
+        }
+    }
+
+    let mut sink = PipeWireSink::new(44100, 1);
+    sink.set_inserts(vec![boxed(LiveGain {
+        bits: Arc::clone(&bits),
+    })])
+    .unwrap();
+    sink.mix(&[1.0], Some(0));
+    bits.store(0.25f32.to_bits(), Ordering::Relaxed);
+    let mut out = [0.0f32; 1];
+    sink.process(&mut out);
+    assert_eq!(out, [0.25]);
+}
+
+#[test]
+fn pipewire_integrator_state_survives_two_process_calls() {
+    let mut sink = PipeWireSink::new(44100, 1);
+    sink.set_inserts(vec![boxed(Integrator { acc: 0.0 })])
+        .unwrap();
+    sink.mix(&[1.0, 1.0], Some(0));
+    let mut a = [0.0f32; 1];
+    sink.process(&mut a);
+    let mut b = [0.0f32; 1];
+    sink.process(&mut b);
+    assert_eq!(a, [1.0]);
+    assert_eq!(b, [2.0]);
 }

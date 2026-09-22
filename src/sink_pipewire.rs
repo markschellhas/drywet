@@ -7,6 +7,7 @@
 
 use std::sync::Mutex;
 
+use crate::insert::{apply_interleaved, Insert, InsertChain, InsertError};
 use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 
 /// Default period size in sample frames when no backend quantum is injected.
@@ -170,6 +171,7 @@ struct MixStorage {
     cmds: [MixCmd; SLOT_COUNT],
     occupied: [bool; SLOT_COUNT],
     playback: usize,
+    inserts: InsertChain,
 }
 
 impl MixStorage {
@@ -179,6 +181,7 @@ impl MixStorage {
             cmds: [MixCmd::default(); SLOT_COUNT],
             occupied: [false; SLOT_COUNT],
             playback: 0,
+            inserts: InsertChain::new(),
         }
     }
 
@@ -260,6 +263,8 @@ impl MixStorage {
                 self.occupied[i] = false;
             }
         }
+
+        apply_interleaved(&mut self.inserts, output, channels as u16);
 
         self.playback = end;
     }
@@ -426,6 +431,24 @@ impl<B: StreamBackend> PipeWireSink<B> {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .enqueue(frames, at);
     }
+
+    /// Replace the playback insert chain. Mix and enqueue stay dry.
+    pub fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        self.mix
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .inserts
+            .set(inserts)
+    }
+
+    /// Apply the insert chain to `frames`. Does not rewrite queued slots.
+    pub fn apply_inserts(&mut self, frames: &mut [f32]) {
+        let mut mix = self
+            .mix
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        apply_interleaved(&mut mix.inserts, frames, self.channels);
+    }
 }
 
 impl<B: StreamBackend> crate::sink::Sink for PipeWireSink<B> {
@@ -467,5 +490,13 @@ impl<B: StreamBackend> crate::sink::Sink for PipeWireSink<B> {
 
     fn frames(&self) -> &[f32] {
         PipeWireSink::frames(self)
+    }
+
+    fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        PipeWireSink::set_inserts(self, inserts)
+    }
+
+    fn apply_inserts(&mut self, frames: &mut [f32]) {
+        PipeWireSink::apply_inserts(self, frames)
     }
 }
