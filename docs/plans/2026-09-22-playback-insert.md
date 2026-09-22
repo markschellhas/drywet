@@ -29,27 +29,27 @@
 
 ## Progress
 
-**Status:** `░░░░░░░░░░░░░░░░░░░░` 0/7 done (0%) · 0 in flight
+**Status:** `██████████████░░░░░░` 5/7 done (71%) · Task 6 in flight
 
 | # | Task | Status | Next |
 |---|------|--------|------|
-| 1 | Insert trait and chain | `todo` | implement |
-| 2 | BufferSink stores chain; mix stays dry | `todo` | implement |
-| 3 | Context::set_inserts; render returns wet | `todo` | implement |
-| 4 | PipeWireSink::process applies chain | `todo` | implement |
-| 5 | DeviceSink callback applies chain | `todo` | implement |
-| 6 | Patch maps and output docs | `todo` | implement |
+| 1 | Insert trait and chain | `done` | — |
+| 2 | BufferSink stores chain; mix stays dry | `done` | — |
+| 3 | Context::set_inserts; render returns wet | `done` | — |
+| 4 | PipeWireSink::process applies chain | `done` | — |
+| 5 | DeviceSink callback applies chain | `done` | — |
+| 6 | Patch maps and output docs | `implementing` | implement |
 | 7 | Full-suite regression | `todo` | implement |
 
 Shared test command: `cargo test -q`
 
 ---
 
-### [ ] Task 1: Insert trait and chain
+### [x] Task 1: Insert trait and chain
 
-**Status:** `todo`
+**Status:** `done`
 **Resume:** —
-**Commits:** —
+**Commits:** `a11f770` feat(insert): add playback insert trait and chain; `f28d8a8` test(insert): lock stereo, chunk, and max-chain limits
 
 **Files:**
 - Create: `src/insert.rs`
@@ -373,11 +373,11 @@ git commit -m "feat(insert): add playback insert trait and chain"
 
 ---
 
-### [ ] Task 2: BufferSink stores chain; mix stays dry
+### [x] Task 2: BufferSink stores chain; mix stays dry
 
-**Status:** `todo`
+**Status:** `done`
 **Resume:** —
-**Commits:** —
+**Commits:** `38d7cf7` feat(sink): keep BufferSink mix dry behind inserts; `3315da9` test(insert): drop unused Sink import
 
 **Files:**
 - Modify: `src/sink.rs`
@@ -475,11 +475,11 @@ git commit -m "feat(sink): keep BufferSink mix dry behind inserts"
 
 ---
 
-### [ ] Task 3: Context::set_inserts; render returns wet
+### [x] Task 3: Context::set_inserts; render returns wet
 
-**Status:** `todo`
+**Status:** `done`
 **Resume:** —
-**Commits:** —
+**Commits:** `8c73b49` feat(context): apply insert chain on render copy
 
 **Files:**
 - Modify: `src/context.rs`
@@ -596,11 +596,11 @@ git commit -m "feat(context): apply insert chain on render copy"
 
 ---
 
-### [ ] Task 4: PipeWireSink::process applies chain
+### [x] Task 4: PipeWireSink::process applies chain
 
-**Status:** `todo`
+**Status:** `done`
 **Resume:** —
-**Commits:** —
+**Commits:** `07b0d28` feat(sink): run insert chain in PipeWire process
 
 **Files:**
 - Modify: `src/sink_pipewire.rs`
@@ -708,11 +708,11 @@ git commit -m "feat(sink): run insert chain in PipeWire process"
 
 ---
 
-### [ ] Task 5: DeviceSink callback applies chain
+### [x] Task 5: DeviceSink callback applies chain
 
-**Status:** `todo`
+**Status:** `done`
 **Resume:** —
-**Commits:** —
+**Commits:** `1067763` feat(sink): run insert chain in DeviceSink callback
 
 **Files:**
 - Modify: `src/sink_device.rs`
@@ -842,8 +842,8 @@ git commit -m "feat(sink): run insert chain in DeviceSink callback"
 
 ### [ ] Task 6: Patch maps and output docs
 
-**Status:** `todo`
-**Resume:** —
+**Status:** `implementing`
+**Resume:** Patch `.features/sinks.yaml` + `.features/context.yaml`, `docs/reference/output.md`, three identical `rust-api.md` copies. Do not create `.features/insert.yaml`. Do not change `.features/engine.yaml`.
 **Commits:** —
 
 **Files:**
