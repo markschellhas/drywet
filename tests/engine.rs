@@ -146,7 +146,8 @@ fn engine_looped_sequence_mixes_second_cycle() {
     assert!(lines
         .iter()
         .any(|row| row.get("event") == Some(&json!("started"))));
-    let frames = ctx.sink().frames();
+    let sink = ctx.sink();
+    let frames = sink.frames();
     let bar = (2.0 * f64::from(ctx.sample_rate())) as usize;
     assert!(
         frames.len() > bar,
