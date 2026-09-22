@@ -16,7 +16,7 @@ This PRD adds a **playback insert**: an ordered, stateful chain that runs on the
 
 The v1 drywet PRD still excludes a node-graph effects catalog. This work is the hook that catalog would need, not the catalog itself. Filter and bitcrush are the motivating consumers, not shipped products here.
 
-Heritage maps in [drywet-py `.features/`](https://github.com/markschellhas/drywet-py/tree/master/.features) (`sinks`, `instruments`, `context`) already state that instruments mix onto the Context sink and do not connect to a node graph. This repo has no `.features/` maps yet; current behavior is taken from `src/sink.rs`, `src/sink_pipewire.rs`, `src/sink_device.rs`, and `src/instrument.rs`.
+This repo’s maps already lock the mix-onto-sink door: `.features/sinks.yaml` (no node graph; instruments mix onto the Context sink), `.features/instruments.yaml` (voices mix PCM; `time=None` at the write cursor), `.features/context.yaml` (one sink per Context; `render` returns that PCM). `feature-map search` for insert, playback, crush, and filter matches nothing — insert is a new stage on **sinks**, not a new musician-facing door.
 
 ## Goals / Non-Goals
 
@@ -42,24 +42,34 @@ Heritage maps in [drywet-py `.features/`](https://github.com/markschellhas/drywe
 
 ## Current Implementation
 
-There is no playback insert. Every voice is rendered to a PCM slice and summed into the sink; that summed buffer is what playback reads.
+There is no playback insert. Maps and code agree: every voice is rendered to a PCM slice and summed into the Context sink; that summed buffer is what playback reads.
 
-**Entry points**
+**Feature-map doors** (`feature-map list`: context, engine, events, instruments, sinks, time, transport)
 
-- Instruments: `src/instrument.rs` `mix_at_time` converts `time` to a sample index (or `None` → write cursor) and calls `ctx.sink_mut().mix(frames, at_sample)`.
-- Trait: `src/sink.rs` `Sink::mix` / `Sink::write`. Mix does not advance the cursor; write does. Tails sum. Stereo duplicates each mono frame.
-- Offline: `src/sink.rs` `BufferSink::mix_at` resizes an expanding `Vec<f32>` and adds into it. `Context::render` (`src/context.rs`) fires the schedule, pads, and returns `sink.frames().to_vec()` — the dry mix.
-- PipeWire-style callback: `src/sink_pipewire.rs` `MixStorage::enqueue` copies dry PCM into a preallocated 64×4096 slot table. `PipeWireSink::process` sums live slots into `output`, then `StreamBackend::process`. No post-sum processing.
-- Native device: `src/sink_device.rs` `Playback::mix` adds dry frames into `mono`. The CPAL callback reads `sample_at(playback_cursor)` and writes that baked sample to the device.
-- Engine: `src/engine.rs` / `src/bin/drywet-engine.rs` expose warmup / start / stop / play-midi / note-on / note-off / bpm / shutdown. No insert or effect command.
+| Map | What it records for this PRD |
+| --- | --- |
+| `.features/sinks.yaml` | Destinations are BufferSink / DeviceSink / PipeWireSink. `mix` sums tails; `write` advances `write_cursor`. Notes: instruments mix onto the Context sink; there is no node graph. |
+| `.features/instruments.yaml` | Synth / Drum / Sampler mix PCM onto that sink. `time=None` mixes at the write cursor. `trigger_release` decrements voice count and does **not** silence already-mixed PCM. |
+| `.features/context.yaml` | One Context owns sample rate, channels, one sink, one Transport. `render(duration)` starts the clock, fires events, pads the sink, returns PCM. |
+| `.features/engine.yaml` | Commands: warmup / start / stop / pause / resume / play-midi / note-on / note-off / bpm / shutdown. No insert or effect verb. DeviceSink default; `--buffer` for BufferSink. |
+
+**Entry points** (from those maps, plus the mix internals they name)
+
+- Instruments: `src/instrument.rs` `mix_at_time` converts `time` to a sample index (or `None` → write cursor) and calls `ctx.sink_mut().mix(frames, at_sample)`. Examples: `examples/chords.rs`, `examples/drums.rs`, `examples/piano.rs`.
+- Trait: `src/sink.rs` `Sink::mix` / `Sink::write`. Mix does not advance the cursor; write does. Tails sum. Stereo duplicates each mono frame. Live example door: `examples/metronome.rs`.
+- Offline: `BufferSink::mix_at` resizes an expanding `Vec<f32>` and adds into it. `Context::render` (`src/context.rs`, `examples/render.rs`) returns `sink.frames().to_vec()` — the dry mix.
+- PipeWire-style callback: `src/sink_pipewire.rs` `MixStorage::enqueue` copies dry PCM into a preallocated 64×4096 slot table. `PipeWireSink::process` sums live slots into `output`, then `StreamBackend::process`. `PipeWireSink::new` injects `MockStream`; a real device uses `with_backend`.
+- Native device: `src/sink_device.rs` `Playback::mix` adds dry frames into `mono`. The CPAL callback reads `sample_at(playback_cursor)` and writes that baked sample. Live flow: `DeviceSink::new()` → `Context::with` → `play()` → `wait_until_end()`.
+- Engine: `src/engine.rs` / `src/bin/drywet-engine.rs` / `examples/engine_session.rs`. No insert command.
 
 **Behavior this causes**
 
 - Once a hit is mixed, its samples are the sound. Changing an effect parameter cannot rewrite queued slots, `BufferSink` frames, or `Playback.mono`.
 - Applying a filter at mix time gives each `mix` chunk a fresh zero state, so hits do not share a filter memory.
 - Hosts that need crush-then-filter must nest that order inside mix, which is the second complaint.
+- Already-mixed PCM is also sticky on release: instruments notes say `trigger_release` does not silence it.
 
-Tests that lock this in: `tests/buffer_sink.rs` (offset mix, tails, stereo duplicate), `tests/pipewire_sink.rs` (`process` equals the summed mix), `tests/render.rs` (sequence/live mix onto `frames()`). Heritage drywet-py `.features/sinks.yaml` and `.features/instruments.yaml` describe the same mix-onto-sink door.
+Tests that lock this in: `tests/buffer_sink.rs` (offset mix, tails, stereo duplicate), `tests/pipewire_sink.rs` (`process` equals the summed mix), `tests/render.rs` (sequence/live mix onto `frames()`). `feature-map check` reports those `src/sink*.rs` / `src/instrument.rs` / `src/context.rs` paths as live.
 
 ## Proposed Implementation
 
@@ -94,9 +104,9 @@ Empty chain is identity. Detach / clear restores dry output. Parameter fields on
 
 No new persistence. Inserts are runtime objects. No schema change to Sequence / Part / Loop JSON. No engine command in this PRD.
 
-**Cross-package**
+**Cross-package / maps**
 
-Library only for this PRD. `drywet-engine` keeps current verbs. A later PRD can add NDJSON once a host needs QML-driven crush/cutoff.
+Library only for this PRD. `drywet-engine` keeps the command list in `.features/engine.yaml`. A later PRD can add NDJSON once a host needs QML-driven crush/cutoff. After ship, patch `.features/sinks.yaml` (and `context` if `render` becomes wet); do not add a separate musician-facing insert map.
 
 ## Technical Details
 
@@ -127,7 +137,7 @@ Library only for this PRD. `drywet-engine` keeps current verbs. A later PRD can 
 
 1. Does `Context::render` return wet PCM (audible product) while `sink.frames()` stays dry, or does render stay dry and hosts call a separate `processed_frames()`? Wet `render` matches Device/PipeWire output; dry `render` matches today’s tests that only check peaks. Peak tests still pass if the default chain is empty.
 2. Process interleaved callback buffers vs process mono then duplicate. Stereo DeviceSink already duplicates in the callback; a mono insert before duplicate is simpler state, but a stereo insert matches the device stream.
-3. Who owns the chain — `Context` or each `Sink`? Context ownership matches one-sink-per-context. Sink ownership makes `PipeWireSink::process` obvious. Prefer Context-owned, borrowed by the sink at output.
+3. Who owns the chain — `Context` or each `Sink`? `.features/context.yaml` is one sink per Context; `.features/sinks.yaml` is where mix and output live. Context ownership matches the map; sink ownership makes `PipeWireSink::process` obvious. Prefer Context-owned, borrowed by the sink at output.
 4. When a host needs QML-driven crush/cutoff, add engine cmds in a follow-up rather than expanding this PRD.
 5. Should `to_pcm_s16le` stay a dry dump for tests, or become a wet export? Same split as `frames()` vs `render`.
 
@@ -136,9 +146,9 @@ Library only for this PRD. `drywet-engine` keeps current verbs. A later PRD can 
 - Source brief: `docs/feature-insert.md`
 - This file: `docs/prds/prd-playback-insert.md`
 - Runtime PRD: `docs/prds/prd-drywet.md` (v1 non-goal: node-graph effects catalog)
+- Feature maps: `.features/sinks.yaml`, `.features/instruments.yaml`, `.features/context.yaml`, `.features/engine.yaml` (`feature-map graph sinks`)
 - Output: `docs/reference/output.md`
-- Engine protocol: `docs/reference/engine.md` (no insert cmds today)
+- Engine protocol: `docs/reference/engine.md` (matches engine map commands; no insert cmds)
 - GUI hosts: `docs/reference/gui.md`
-- Heritage maps: [drywet-py `.features/sinks.yaml`](https://github.com/markschellhas/drywet-py/blob/master/.features/sinks.yaml), [instruments.yaml](https://github.com/markschellhas/drywet-py/blob/master/.features/instruments.yaml), [context.yaml](https://github.com/markschellhas/drywet-py/blob/master/.features/context.yaml)
+- Heritage maps: [drywet-py `.features/`](https://github.com/markschellhas/drywet-py/tree/master/.features) (same door names; reference only)
 - Implementation plan (mix/sink already shipped): `docs/plans/2026-09-20-drywet.md`
-- This repo has no `.features/` maps yet. When they exist, playback insert belongs next to sinks / context, not a new musician-facing door.
