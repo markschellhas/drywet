@@ -13,7 +13,8 @@ apps:
 user_flow:
   primary: "App calls Context::new() → BufferSink at 44100 Hz mono + one Transport"
   live: "App opens DeviceSink → Context::with(rate, channels, sink) → instruments share that Context"
-  render: "App calls ctx.render(duration) → starts clock, fires events, pads the sink, returns PCM"
+  render: "App calls ctx.render(duration) → starts clock, fires events, pads the sink, returns wet PCM; sink.frames() stays dry"
+  insert: "App calls ctx.set_inserts(...) → forwards to the owned sink"
 
 related_features:
   - transport (owned playhead and schedule)

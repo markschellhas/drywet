@@ -1,0 +1,319 @@
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+
+use drywet::insert::{apply_interleaved, Insert, InsertChain, InsertError};
+use drywet::limits::MAX_INSERTS;
+use drywet::BufferSink;
+use drywet::Context;
+use drywet::PipeWireSink;
+
+struct Gain {
+    gain: f32,
+}
+
+impl Insert for Gain {
+    fn process(&mut self, frames: &mut [f32]) {
+        for sample in frames.iter_mut() {
+            *sample *= self.gain;
+        }
+    }
+}
+
+struct Add {
+    delta: f32,
+}
+
+impl Insert for Add {
+    fn process(&mut self, frames: &mut [f32]) {
+        for sample in frames.iter_mut() {
+            *sample += self.delta;
+        }
+    }
+}
+
+struct Integrator {
+    acc: f32,
+}
+
+impl Insert for Integrator {
+    fn process(&mut self, frames: &mut [f32]) {
+        for sample in frames.iter_mut() {
+            self.acc += *sample;
+            *sample = self.acc;
+        }
+    }
+}
+
+fn boxed<I: Insert + 'static>(insert: I) -> Box<dyn Insert> {
+    Box::new(insert)
+}
+
+#[test]
+fn empty_chain_is_identity() {
+    let mut chain = InsertChain::new();
+    let mut frames = [0.25, -0.5];
+    chain.process(&mut frames);
+    assert_eq!(frames, [0.25, -0.5]);
+}
+
+#[test]
+fn gain_scales_the_block() {
+    let mut chain = InsertChain::new();
+    chain.set(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    let mut frames = [0.25, -0.5];
+    chain.process(&mut frames);
+    assert_eq!(frames, [0.5, -1.0]);
+}
+
+#[test]
+fn chain_order_is_playback_order() {
+    let mut add_then_gain = InsertChain::new();
+    add_then_gain
+        .set(vec![boxed(Add { delta: 1.0 }), boxed(Gain { gain: 2.0 })])
+        .unwrap();
+    let mut a = [1.0];
+    add_then_gain.process(&mut a);
+
+    let mut gain_then_add = InsertChain::new();
+    gain_then_add
+        .set(vec![boxed(Gain { gain: 2.0 }), boxed(Add { delta: 1.0 })])
+        .unwrap();
+    let mut b = [1.0];
+    gain_then_add.process(&mut b);
+
+    assert_eq!(a, [4.0]);
+    assert_eq!(b, [3.0]);
+}
+
+#[test]
+fn integrator_keeps_state_across_calls() {
+    let mut chain = InsertChain::new();
+    chain.set(vec![boxed(Integrator { acc: 0.0 })]).unwrap();
+    let mut first = [1.0];
+    chain.process(&mut first);
+    let mut second = [1.0];
+    chain.process(&mut second);
+    assert_eq!(first, [1.0]);
+    assert_eq!(second, [2.0]);
+}
+
+#[test]
+fn process_chunks_match_one_call() {
+    let mut whole = InsertChain::new();
+    whole.set(vec![boxed(Integrator { acc: 0.0 })]).unwrap();
+    let mut all = [0.5, 0.5];
+    whole.process(&mut all);
+
+    let mut parts = InsertChain::new();
+    parts.set(vec![boxed(Integrator { acc: 0.0 })]).unwrap();
+    let mut a = [0.5];
+    let mut b = [0.5];
+    parts.process(&mut a);
+    parts.process(&mut b);
+
+    assert_eq!(all, [0.5, 1.0]);
+    assert_eq!([a[0], b[0]], all);
+}
+
+#[test]
+fn stereo_apply_processes_mono_then_duplicates() {
+    let mut chain = InsertChain::new();
+    chain.set(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    let mut interleaved = [0.25, 0.1, 0.5, 0.2];
+    apply_interleaved(&mut chain, &mut interleaved, 2);
+    assert_eq!(interleaved, [0.5, 0.5, 1.0, 1.0]);
+}
+
+#[test]
+fn stereo_apply_chunks_match_extracted_mono() {
+    // Longer than apply_interleaved's 64-frame stack chunk so remainder n < 64.
+    const FRAMES: usize = 70;
+    let mut interleaved = vec![0.0f32; FRAMES * 2];
+    for i in 0..FRAMES {
+        interleaved[i * 2] = 0.25;
+        interleaved[i * 2 + 1] = 0.1;
+    }
+
+    let mut wet = InsertChain::new();
+    wet.set(vec![boxed(Integrator { acc: 0.0 })]).unwrap();
+    let mut applied = interleaved.clone();
+    apply_interleaved(&mut wet, &mut applied, 2);
+
+    let mut mono: Vec<f32> = interleaved.chunks(2).map(|frame| frame[0]).collect();
+    let mut reference = InsertChain::new();
+    reference.set(vec![boxed(Integrator { acc: 0.0 })]).unwrap();
+    reference.process(&mut mono);
+
+    let mut expected = vec![0.0f32; FRAMES * 2];
+    for i in 0..FRAMES {
+        expected[i * 2] = mono[i];
+        expected[i * 2 + 1] = mono[i];
+    }
+    assert_eq!(applied, expected);
+}
+
+#[test]
+fn chain_full_keeps_previous_inserts() {
+    let mut chain = InsertChain::new();
+    chain.set(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    let too_many: Vec<Box<dyn Insert>> = (0..=MAX_INSERTS)
+        .map(|_| boxed(Gain { gain: 3.0 }))
+        .collect();
+    match chain.set(too_many) {
+        Err(InsertError::ChainFull { max, got }) => {
+            assert_eq!(max, MAX_INSERTS);
+            assert_eq!(got, MAX_INSERTS + 1);
+        }
+        other => panic!("expected ChainFull, got {other:?}"),
+    }
+    let mut frames = [1.0];
+    chain.process(&mut frames);
+    assert_eq!(frames, [2.0]);
+}
+
+#[test]
+fn chain_at_max_inserts_applies_all() {
+    let mut chain = InsertChain::new();
+    let inserts: Vec<Box<dyn Insert>> = (0..MAX_INSERTS)
+        .map(|_| boxed(Gain { gain: 2.0 }))
+        .collect();
+    chain.set(inserts).unwrap();
+    let mut frames = [1.0];
+    chain.process(&mut frames);
+    assert_eq!(frames, [256.0]);
+}
+
+#[test]
+fn live_gain_handle_changes_next_block() {
+    struct LiveGain {
+        bits: Arc<AtomicU32>,
+    }
+    impl Insert for LiveGain {
+        fn process(&mut self, frames: &mut [f32]) {
+            let gain = f32::from_bits(self.bits.load(Ordering::Relaxed));
+            for sample in frames {
+                *sample *= gain;
+            }
+        }
+    }
+
+    let bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+    let mut chain = InsertChain::new();
+    chain
+        .set(vec![boxed(LiveGain {
+            bits: Arc::clone(&bits),
+        })])
+        .unwrap();
+    let mut first = [1.0];
+    chain.process(&mut first);
+    bits.store(0.5f32.to_bits(), Ordering::Relaxed);
+    let mut second = [1.0];
+    chain.process(&mut second);
+    assert_eq!(first, [1.0]);
+    assert_eq!(second, [0.5]);
+}
+
+#[test]
+fn buffer_mix_stays_dry_when_inserts_attached() {
+    let mut sink = BufferSink::new(8, 1);
+    sink.set_inserts(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    sink.mix(&[0.25, 0.5], Some(0));
+    assert_eq!(sink.frames(), &[0.25, 0.5]);
+    let pcm = sink.to_pcm_s16le();
+    let mut expected = Vec::new();
+    expected
+        .extend_from_slice(&((0.25f32.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes());
+    expected.extend_from_slice(&((0.5f32.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes());
+    assert_eq!(pcm, expected);
+}
+
+#[test]
+fn buffer_apply_inserts_wets_a_copy_not_frames() {
+    let mut sink = BufferSink::new(8, 1);
+    sink.set_inserts(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    sink.mix(&[0.25], Some(0));
+    let mut wet = sink.frames().to_vec();
+    sink.apply_inserts(&mut wet);
+    assert_eq!(wet, vec![0.5]);
+    assert_eq!(sink.frames(), &[0.25]);
+}
+
+#[test]
+fn render_returns_wet_and_frames_stay_dry() {
+    let ctx = Context::new();
+    ctx.set_inserts(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    ctx.sink_mut().write(&[0.25]);
+    let wet = ctx.render(1.0 / f64::from(ctx.sample_rate())).unwrap();
+    assert_eq!(&wet[..1], &[0.5]);
+    assert_eq!(&ctx.sink().frames()[..1], &[0.25]);
+}
+
+#[test]
+fn render_without_inserts_matches_frames() {
+    let ctx = Context::new();
+    ctx.sink_mut().write(&[0.25]);
+    let pcm = ctx.render(1.0 / f64::from(ctx.sample_rate())).unwrap();
+    assert_eq!(pcm.len(), ctx.sink().frames().len());
+    assert_eq!(&pcm[..1], &ctx.sink().frames()[..1]);
+}
+
+#[test]
+fn set_inserts_after_mix_changes_next_render() {
+    let ctx = Context::new();
+    ctx.sink_mut().write(&[1.0]);
+    ctx.set_inserts(vec![boxed(Gain { gain: 0.5 })]).unwrap();
+    let wet = ctx.render(1.0 / f64::from(ctx.sample_rate())).unwrap();
+    assert_eq!(&wet[..1], &[0.5]);
+    assert_eq!(&ctx.sink().frames()[..1], &[1.0]);
+}
+
+#[test]
+fn pipewire_process_is_wet_slots_stay_queued_until_callback() {
+    let mut sink = PipeWireSink::new(44100, 1);
+    sink.set_inserts(vec![boxed(Gain { gain: 2.0 })]).unwrap();
+    sink.mix(&[0.25, 0.5], Some(0));
+    let mut out = [0.0f32; 2];
+    sink.process(&mut out);
+    assert_eq!(out, [0.5, 1.0]);
+}
+
+#[test]
+fn pipewire_param_after_enqueue_affects_already_queued_audio() {
+    let bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+    struct LiveGain {
+        bits: Arc<AtomicU32>,
+    }
+    impl Insert for LiveGain {
+        fn process(&mut self, frames: &mut [f32]) {
+            let gain = f32::from_bits(self.bits.load(Ordering::Relaxed));
+            for sample in frames {
+                *sample *= gain;
+            }
+        }
+    }
+
+    let mut sink = PipeWireSink::new(44100, 1);
+    sink.set_inserts(vec![boxed(LiveGain {
+        bits: Arc::clone(&bits),
+    })])
+    .unwrap();
+    sink.mix(&[1.0], Some(0));
+    bits.store(0.25f32.to_bits(), Ordering::Relaxed);
+    let mut out = [0.0f32; 1];
+    sink.process(&mut out);
+    assert_eq!(out, [0.25]);
+}
+
+#[test]
+fn pipewire_integrator_state_survives_two_process_calls() {
+    let mut sink = PipeWireSink::new(44100, 1);
+    sink.set_inserts(vec![boxed(Integrator { acc: 0.0 })])
+        .unwrap();
+    sink.mix(&[1.0, 1.0], Some(0));
+    let mut a = [0.0f32; 1];
+    sink.process(&mut a);
+    let mut b = [0.0f32; 1];
+    sink.process(&mut b);
+    assert_eq!(a, [1.0]);
+    assert_eq!(b, [2.0]);
+}

@@ -1,5 +1,6 @@
 use std::cell::{Ref, RefCell, RefMut};
 
+use crate::insert::{Insert, InsertError};
 use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 use crate::sink::{BufferSink, Sink};
 use crate::time::{IntoTime, TimeError};
@@ -82,10 +83,28 @@ impl<S: Sink> Context<S> {
         self.transport.borrow().to_seconds(value)
     }
 
-    /// Start if needed, fire scheduled events through `duration`, pad the
-    /// sink, and return a copy of the sink frames.
+    /// Replace the playback insert chain on the owned sink.
     ///
-    /// Port of drywet-py `Transport.render`. The sink is borrowed only for
+    /// Mix and write stay dry. The chain runs on a copy in [`Self::render`].
+    pub fn set_inserts(
+        &self,
+        inserts: impl IntoIterator<Item = Box<dyn Insert>>,
+    ) -> Result<(), InsertError> {
+        self.sink
+            .borrow_mut()
+            .set_inserts(inserts.into_iter().collect())
+    }
+
+    /// Clear the playback insert chain.
+    pub fn clear_inserts(&self) -> Result<(), InsertError> {
+        self.set_inserts(Vec::new())
+    }
+
+    /// Start if needed, fire scheduled events through `duration`, pad the
+    /// sink, and return a wet copy of the sink frames.
+    ///
+    /// Inserts run on that copy; [`Sink::frames`] stay dry. Port of
+    /// drywet-py `Transport.render`. The sink is borrowed only for
     /// start/pad — not while callbacks run — so instruments can mix.
     pub fn render(&self, duration: impl IntoTime) -> Result<Vec<f32>, TransportError> {
         if self.transport.borrow().state() != TransportState::Started {
@@ -101,7 +120,9 @@ impl<S: Sink> Context<S> {
         if cursor < needed {
             sink.write(&vec![0.0; needed - cursor]);
         }
-        Ok(sink.frames().to_vec())
+        let mut pcm = sink.frames().to_vec();
+        sink.apply_inserts(&mut pcm);
+        Ok(pcm)
     }
 }
 

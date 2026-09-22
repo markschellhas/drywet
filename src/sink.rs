@@ -1,3 +1,4 @@
+use crate::insert::{apply_interleaved, Insert, InsertChain, InsertError};
 use crate::limits::{DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE};
 
 pub use crate::sink_device::{DeviceSink, DeviceSinkError};
@@ -34,6 +35,19 @@ pub trait Sink {
     /// Whether any mix or write has been accepted.
     fn accepted(&self) -> bool;
 
+    /// Replace the playback insert chain. Default ignores `inserts`.
+    ///
+    /// Mix and write stay dry. Object-safe (`Vec<Box<dyn Insert>>`, no generics).
+    fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        let _ = inserts;
+        Ok(())
+    }
+
+    /// Apply the insert chain to a caller-owned buffer. Default is a no-op.
+    fn apply_inserts(&mut self, frames: &mut [f32]) {
+        let _ = frames;
+    }
+
     /// Mark the destination as accepted. Default is a no-op.
     ///
     /// [`crate::transport::TransportRef::start`] uses this so BufferSink
@@ -65,6 +79,7 @@ pub struct BufferSink {
     buf: Vec<f32>,
     write_cursor: usize,
     accepted: bool,
+    inserts: InsertChain,
 }
 
 impl BufferSink {
@@ -76,6 +91,7 @@ impl BufferSink {
             buf: Vec::new(),
             write_cursor: 0,
             accepted: false,
+            inserts: InsertChain::new(),
         }
     }
 
@@ -133,6 +149,16 @@ impl BufferSink {
     /// Set [`accepted`](Self::accepted) without mixing audio.
     pub fn mark_accepted(&mut self) {
         self.accepted = true;
+    }
+
+    /// Replace the playback insert chain. Mix, write, and [`frames`](Self::frames) stay dry.
+    pub fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        self.inserts.set(inserts)
+    }
+
+    /// Apply the insert chain to `frames`. Does not rewrite the dry buffer.
+    pub fn apply_inserts(&mut self, frames: &mut [f32]) {
+        apply_interleaved(&mut self.inserts, frames, self.channels);
     }
 
     /// Clip to `[-1, 1]`, then pack `round(clipped * 32767)` as little-endian i16.
@@ -203,5 +229,13 @@ impl Sink for BufferSink {
 
     fn frames(&self) -> &[f32] {
         BufferSink::frames(self)
+    }
+
+    fn set_inserts(&mut self, inserts: Vec<Box<dyn Insert>>) -> Result<(), InsertError> {
+        BufferSink::set_inserts(self, inserts)
+    }
+
+    fn apply_inserts(&mut self, frames: &mut [f32]) {
+        BufferSink::apply_inserts(self, frames)
     }
 }
